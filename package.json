@@ -1,0 +1,20 @@
+{
+  "name": "strength-studio",
+  "private": true,
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @strength-studio/backend build && pnpm --filter @strength-studio/dashboard build",
+    "db:generate": "pnpm --filter @strength-studio/backend db:generate",
+    "db:migrate": "node --env-file=.env apps/backend/node_modules/prisma/build/index.js migrate deploy --schema apps/backend/prisma/schema.prisma",
+    "dev:api": "node --env-file=.env apps/backend/dist/main.js",
+    "seed:local": "node --env-file=.env apps/backend/dist/local-seed.js",
+    "openapi": "pnpm --filter @strength-studio/backend openapi",
+    "test:unit": "pnpm --filter @strength-studio/backend test:unit",
+    "test:integration": "node --env-file=.env --test apps/backend/test/foundation.integration.test.cjs",
+    "verify": "pnpm db:generate && pnpm build && pnpm test:unit && pnpm test:integration",
+    "dev:dashboard": "node apps/dashboard/local-dev.cjs dev apps/dashboard --hostname 127.0.0.1 --port 3001"
+  }
+}

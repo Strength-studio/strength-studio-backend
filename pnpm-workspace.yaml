@@ -1,0 +1,7 @@
+packages:
+  - apps/backend
+  - apps/dashboard
+
+overrides:
+  '@nestjs/platform-express@11.2.8>multer': 2.5.0
+  '@prisma/config@6.19.3>deepmerge-ts': 8.0.0

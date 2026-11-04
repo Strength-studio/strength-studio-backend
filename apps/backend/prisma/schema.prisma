@@ -1,0 +1,238 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("MIGRATION_DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+  COACH
+  CLIENT
+
+  @@map("user_role")
+}
+
+enum AccountState {
+  INVITED
+  PENDING_VERIFICATION
+  ACTIVE
+  DISABLED
+
+  @@map("account_state")
+}
+
+enum StaffPermission {
+  CLIENT_MANAGE             @map("client.manage")
+  CATALOG_READ              @map("catalog.read")
+  CATALOG_MANAGE            @map("catalog.manage")
+  CATALOG_PRIVATE_MANAGE    @map("catalog.private.manage")
+  PURCHASE_READ             @map("purchase.read")
+  PURCHASE_REVIEW           @map("purchase.review")
+  PURCHASE_RECORD           @map("purchase.record")
+  FINANCE_READ              @map("finance.read")
+  INSTALLMENT_MANAGE        @map("installment.manage")
+  PAYMENT_RECORD            @map("payment.record")
+  PAYMENT_VERIFY            @map("payment.verify")
+  PAYMENT_ALLOCATE          @map("payment.allocate")
+  MEMBERSHIP_ACTIVATE       @map("membership.activate")
+  SCHEDULE_READ             @map("schedule.read")
+  SCHEDULE_MANAGE           @map("schedule.manage")
+  AVAILABILITY_DECIDE       @map("availability.decide")
+  BOOKING_READ              @map("booking.read")
+  BOOKING_ASSIST            @map("booking.assist")
+  BOOKING_APPROVE           @map("booking.approve")
+  BOOKING_CANCEL_DECIDE     @map("booking.cancel.decide")
+  BOOKING_RESCHEDULE_DECIDE @map("booking.reschedule.decide")
+  BOOKING_WAITLIST_PROMOTE  @map("booking.waitlist.promote")
+  ATTENDANCE_READ           @map("attendance.read")
+  REPORT_READ               @map("report.read")
+  REPORT_EXPORT             @map("report.export")
+  AUDIT_READ                @map("audit.read")
+
+  @@map("staff_permission")
+}
+
+enum TokenPurpose {
+  INVITE
+  VERIFY_EMAIL
+  PASSWORD_RESET
+  REFRESH
+  SOCKET
+
+  @@map("token_purpose")
+}
+
+enum AuditAction {
+  ACCOUNT_DISABLED
+  STAFF_GRANT_CHANGED
+  REFRESH_REPLAY
+  SESSION_REVOKED
+  STUDIO_POLICY_PUBLISHED
+
+  @@map("audit_action")
+}
+
+enum AuditTarget {
+  USER
+  STAFF_GRANT
+  AUTH_SESSION
+  POLICY_REVISION
+
+  @@map("audit_target")
+}
+
+model User {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  normalizedEmail String         @unique @map("normalized_email")
+  role            Role
+  accountState    AccountState   @map("account_state")
+  passwordHash    String?        @map("password_hash")
+  emailVerifiedAt DateTime?      @map("email_verified_at") @db.Timestamptz(6)
+  client          ClientProfile?
+  coach           CoachProfile?
+  grants          StaffGrant[]   @relation("Staff")
+  changedGrants   StaffGrant[]   @relation("GrantActor")
+  sessions        AuthSession[]
+  tokens          AuthToken[]
+  policies        PolicyRevision[]
+  audit           AuditLog[]
+  retries         IdempotencyKey[]
+
+  @@map("app_user")
+}
+
+model ClientProfile {
+  userId      String   @id @map("user_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  displayName String   @map("display_name")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("client_profile")
+}
+
+model CoachProfile {
+  userId      String   @id @map("user_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  displayName String   @map("display_name")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("coach_profile")
+}
+
+model StaffGrant {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  staffUserId String          @map("staff_user_id") @db.Uuid
+  permission  StaffPermission
+  changedById String          @map("changed_by") @db.Uuid
+  revokedAt   DateTime?       @map("revoked_at") @db.Timestamptz(6)
+  staff       User            @relation("Staff", fields: [staffUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  changedBy   User            @relation("GrantActor", fields: [changedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([staffUserId, permission])
+  @@index([changedById])
+  @@map("staff_grant")
+}
+
+model AuthSession {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  userId    String      @map("user_id") @db.Uuid
+  expiresAt DateTime    @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime?   @map("revoked_at") @db.Timestamptz(6)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  tokens    AuthToken[]
+
+  @@unique([id, userId])
+  @@index([userId, revokedAt, expiresAt])
+  @@map("auth_session")
+}
+
+model AuthToken {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  userId     String       @map("user_id") @db.Uuid
+  sessionId  String?      @map("session_id") @db.Uuid
+  purpose    TokenPurpose
+  digest     String       @unique
+  expiresAt  DateTime     @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime?    @map("consumed_at") @db.Timestamptz(6)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  session    AuthSession? @relation(fields: [sessionId, userId], references: [id, userId], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([sessionId, userId])
+  @@index([userId, purpose, expiresAt])
+  @@map("auth_token")
+}
+
+model StudioSettings {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  singletonKey   String          @unique @map("singleton_key")
+  activePolicyId String?         @map("active_policy_id") @db.Uuid
+  activePolicy   PolicyRevision? @relation("ActivePolicy", fields: [activePolicyId, id], references: [id, studioId], onDelete: Restrict, onUpdate: NoAction)
+  revisions      PolicyRevision[] @relation("StudioPolicy")
+
+  @@map("studio_settings")
+}
+
+model PolicyRevision {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  studioId        String           @map("studio_id") @db.Uuid
+  version         Int
+  effectiveAt     DateTime         @map("effective_at") @db.Timestamptz(6)
+  approvedById    String           @map("approved_by") @db.Uuid
+  timezone        String
+  defaultCurrency String           @map("default_currency")
+  rules           Json             @db.JsonB
+  studio          StudioSettings   @relation("StudioPolicy", fields: [studioId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  approvedBy      User             @relation(fields: [approvedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  activeFor       StudioSettings[] @relation("ActivePolicy")
+
+  @@unique([id, studioId])
+  @@unique([studioId, version])
+  @@index([approvedById])
+  @@map("policy_revision")
+}
+
+model AuditLog {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  actorId         String?     @map("actor_id") @db.Uuid
+  action          AuditAction
+  targetType      AuditTarget @map("target_type")
+  targetId        String      @map("target_id") @db.Uuid
+  requestId       String?     @map("request_id")
+  reason          String?
+  redactedDetails Json        @map("redacted_details") @db.JsonB
+  actor           User?       @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([actorId])
+  @@index([targetType, targetId, createdAt])
+  @@index([requestId])
+  @@map("audit_log")
+}
+
+model IdempotencyKey {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  actorId         String   @map("actor_id") @db.Uuid
+  operation       String
+  key             String
+  requestDigest   String   @map("request_digest")
+  expiresAt       DateTime @map("expires_at") @db.Timestamptz(6)
+  resultStatus    Int?     @map("result_status")
+  resultReference String?  @map("result_reference")
+  actor           User     @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([actorId, operation, key])
+  @@index([expiresAt])
+  @@map("idempotency_key")
+}

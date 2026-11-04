@@ -1,0 +1,38 @@
+name: Foundation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare disposable local database
+        run: |
+          cp .env.example .env
+          sed -i "s/^AUTH_SIGNING_KEY=.*/AUTH_SIGNING_KEY=$(openssl rand -hex 32)/" .env
+          sed -i "s/^DASHBOARD_CSRF_KEY=.*/DASHBOARD_CSRF_KEY=$(openssl rand -hex 32)/" .env
+          docker compose -f compose.dev.yml up -d --wait
+          pnpm db:migrate
+      - run: pnpm verify
+      - name: Check OpenAPI snapshot
+        run: |
+          pnpm openapi
+          git diff --exit-code -- packages/api-contract/openapi.json
+      - name: Remove CI database
+        if: always()
+        run: docker compose -f compose.dev.yml down -v
