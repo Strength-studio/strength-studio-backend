@@ -18,5 +18,10 @@ A decision marked pending is not a launch rule. Optional workflows remain disabl
 | O-12 | Backup provider, retention, key custody, RPO/RTO, restore drill cadence, optional Hostinger backup | Release validation |
 | O-13 | Mobile launch targets and original delivery, ownership, support, and warranty commitments | Handover planning |
 | O-14 | Foundation authorization was granted. Production deployment still requires separate authorization. | Before production |
+| O-15 | Resolve activation-authority discrepancy: the 7 November 2026 review request specifies Admin-only ordinary activation, while the current matrix and Foundation grant/test contract allow explicitly granted Staff on the verified-funded path. The review plan follows the requested Admin-only direction; reconcile canonical sources before implementation. No Foundation behavior changed in this review. | Membership implementation |
+| O-16 | Whether a client may have concurrent active memberships; independent balances/validity versus replacement or pooling. Recommendation only: permit independent memberships and require explicit membership selection in the later booking workflow. | Membership issuance and activation |
+| O-17 | Purchase-request acceptance versus recording, required agreement evidence, purchase cancellation/adjustment lifecycle, final-price composition and zero-price issuance. Recommendation only: atomic acceptance/recording with both permissions, immutable recorded terms, explicit Admin corrections, no zero-price purchases initially. | Purchase implementation |
 
 See [business rules](business-rules.md) and [roadmap](implementation-roadmap.md).
+
+Review note — 7 November 2026: [Milestone 2 readiness review](milestone-2-readiness-review.md), [decision register](milestone-2-decision-register.md), and [implementation plan](milestone-2-implementation-plan.md) expand O-01 and O-03–O-07 and document O-15–O-17. All recommendations remain unapproved. O-01–O-14 are retained unchanged; receipt identity, allocation/credit details, refund corrections and membership timing remain refinements of their existing decisions rather than duplicate entries.
