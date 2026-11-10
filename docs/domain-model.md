@@ -1,6 +1,6 @@
 # Domain model and revised ERD
 
-Status: proposed Milestone 0 schema. The two panels form one model. The [data dictionary](data-dictionary.md) defines all foreign keys, including actor, policy, scoped, and self-referencing edges omitted from the panels for readability. One studio is assumed. Branches are out of scope.
+Status: proposed schema. See the [Milestone 2 entity deltas](milestone-2-implementation-plan.md#proposed-domain-entities) for pending payment, credit and lifecycle design. The two panels form one model. The [data dictionary](data-dictionary.md) defines all foreign keys, including actor, policy, scoped, and self-referencing edges omitted from the panels for readability. One studio is assumed. Branches are out of scope.
 
 ## Commercial and entitlement
 
@@ -20,6 +20,8 @@ erDiagram
     CLIENT_PROFILE ||--o{ PURCHASE_REQUEST : submits
     PACKAGE_VERSION ||--o{ PURCHASE_REQUEST : requested_as
     PURCHASE_REQUEST o|--o| PURCHASE : becomes
+    CLIENT_PROFILE ||--o{ AGREEMENT_EVIDENCE : confirms
+    AGREEMENT_EVIDENCE ||--o| PURCHASE : supports
     CLIENT_PROFILE ||--o{ FINANCE_ACCOUNT : owns_by_currency
     FINANCE_ACCOUNT ||--o{ PURCHASE : scopes
     PURCHASE ||--|{ PURCHASE_ITEM : contains
@@ -32,7 +34,7 @@ erDiagram
     FINANCE_ACCOUNT ||--o{ FINANCE_EVENT : posts
     FINANCE_ACCOUNT ||--o{ REFUND : scopes
     PAYMENT o|--o| CREDIT_LOT : originates
-    FINANCE_EVENT o|--o| PAYMENT : verifies
+    FINANCE_EVENT o|--o| PAYMENT : posts_authorized_origin
     CREDIT_LOT o|--o{ FINANCE_EVENT : funds
     PURCHASE o|--o{ FINANCE_EVENT : targets
     INSTALLMENT o|--o{ FINANCE_EVENT : allocates
@@ -43,7 +45,9 @@ erDiagram
     FINANCE_EVENT o|--o{ MEMBERSHIP_EVENT : evidences_activation
     MEMBERSHIP ||--o{ ENTITLEMENT_ENTRY : reconciles
     MEMBERSHIP ||--o{ ENTITLEMENT_REVIEW : reviews
-    REFUND ||--o{ ENTITLEMENT_REVIEW : prompts
+    REFUND o|--o{ ENTITLEMENT_REVIEW : prompts
+    FINANCE_EVENT o|--o{ ENTITLEMENT_REVIEW : prompts_after_correction
+    PURCHASE o|--o{ ENTITLEMENT_REVIEW : prompts_after_cancellation
     ENTITLEMENT_REVIEW o|--o{ MEMBERSHIP_EVENT : authorizes
     ENTITLEMENT_REVIEW o|--o| ENTITLEMENT_ENTRY : sources
     MEMBERSHIP_EVENT o|--o| ENTITLEMENT_ENTRY : sources
@@ -83,11 +87,11 @@ erDiagram
 ## Relationship corrections
 
 - **Payment allocation is a relationship, not a second ledger.** Read PAYMENT → CREDIT_LOT → allocation FINANCE_EVENT → PURCHASE and optional INSTALLMENT. The event is the allocation row. Many lots can fund one installment and one lot can fund many installments. Reversal events reference prior allocation events. REFUND references the original payment and lot, and its linked events record any funding reversals and cash return. A refund can have zero or more entitlement reviews, each scoped to one membership.
-- **Activation evidence belongs to the purchase.** MEMBERSHIP comes from one PURCHASE_ITEM. An activation MEMBERSHIP_EVENT cites a relevant allocation event backed by a verified payment and the policy used, or records a reasoned Admin exception. The transaction validates the full funding threshold across relevant allocations. One cited event is an evidence anchor, not the total.
-- **Entitlement has multiple authorized sources.** An initial grant or administrative adjustment comes from a membership event, a refund effect from an entitlement review, and a verified usage adjustment from an accepted attendance verification. Each entry has exactly one source. ATTENDANCE_VERIFICATION is not a child of MEMBERSHIP_EVENT. They meet through the participant and entitlement entry.
-- **One participant is one seat.** BOOKING_PARTICIPANT is the public booking ID. A group slot has many participant bookings, one per client per active slot. Slotless alternative requests do not reserve a seat. Group attendance is per participant.
+- **Activation evidence belongs to the purchase.** MEMBERSHIP comes from one PURCHASE_ITEM. An Admin activation MEMBERSHIP_EVENT cites eligible allocations to the same purchase backed by authorized payment or client credit, or the SAR 0 purchase basis. The separate Admin exception remains gated. Capture applied policy and evaluated funding across relevant allocations. One cited event is an evidence anchor. Concurrent memberships keep independent histories.
+- **Entitlement has multiple authorized sources.** An initial grant or administrative adjustment comes from a membership event, a service consequence from an entitlement review, and a verified usage adjustment from an accepted attendance verification. Each entry has exactly one source. ATTENDANCE_VERIFICATION is not a child of MEMBERSHIP_EVENT. They meet through the participant and entitlement entry.
+- **One participant is one seat.** BOOKING_PARTICIPANT is the public booking ID. A group slot has many participant bookings, one per client per active slot. Slotless alternative requests do not reserve a seat. Group attendance is per participant. The participant explicitly identifies the covering membership and Admin attendance verification applies any unit effect only there.
 - **Current projections and history differ.** Booking and membership hold current state. Booking changes, membership events, served coach assignments, attendance revisions, verification decisions, finance events, and entitlement entries preserve history. Account and unit balances are computed, never overwritten. The [scoped FK and ownership map](data-dictionary.md#scoped-foreign-keys-and-ownership) binds these records to the same client, purchase, or service assignment where required.
-- **Versioned offers preserve agreed terms.** Public or client-only packages have immutable published versions and session eligibility. The purchase item snapshots agreed terms. Renegotiation creates a new version or a new explicit offer. It never silently substitutes price or validity on an existing request or purchase.
+- **Versioned offers preserve agreed terms.** Public or client-only packages have immutable published versions and session eligibility. Dedicated formal acceptance records client agreement evidence. The purchase item snapshots agreed terms. Renegotiation creates a new version or a new explicit offer. It never silently substitutes terms on an existing request or purchase. An issued private version has optional Riyadh expiry and becomes ineligible on supersession or reasoned withdrawal.
 - **Private commission audit is a distinct access surface.** Commission records, distributions, and their audit use a restricted schema. Staff profiles do not need a separate table. Waitlist can use the participant model if enabled. A general ledger, branch entity, and push device registration are outside the initial build.
 
 See [business rules](business-rules.md) for states and locks, and [permissions](permission-matrix.md) for access boundaries.

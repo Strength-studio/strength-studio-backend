@@ -1,166 +1,58 @@
 # Milestone 2 readiness review
 
-Review date: 7 November 2026. Baseline: `d8390ab` — Implement Strength Studio Foundation. Scope: commercial and entitlement review, analysis and implementation planning only.
+Reviewed 10 November 2026 on the existing `main` branch. The working tree contained the previous uncommitted documentation consolidation at the start. No staged, source, schema, test or deployment changes were present. HEAD and the local `origin/main` reference were at `055a67d` (Milestone 2 documentation). Foundation was introduced in `d8390ab`.
 
-## Executive summary
-
-**Milestone 2 is not yet ready for implementation as a complete business milestone.** Foundation supplies useful identity, permission, transaction, audit and settings infrastructure, but no commercial persistence or enabled workflows. Owner decisions O-01 and O-03–O-07 remain pending. Three missing/discrepant decisions are recorded as O-15–O-17. Audit B01–B03 and the catalog portion of B05 still require concrete design/test closure before enabling their workflows.
-
-The architecture remains suitable at the current scale. Retain Flutter, Next.js on Vercel, one NestJS modular monolith REST API, Socket.IO, PostgreSQL/Prisma, Redis/BullMQ, Hostinger KVM1 and Nginx/TLS. No additional infrastructure, general accounting ledger, service decomposition or workflow engine is recommended.
-
-The principal conflict is activation authority. The review request specifies Admin-only membership activation; the canonical matrix and Foundation implementation/tests permit explicitly granted Staff on the ordinary verified-funded path. Only activation exceptions are consistently Admin-only today. The plan follows the review request's Admin-only direction, flags the conflicting sources, and changes neither Foundation behavior nor canonical permissions in this review. Resolve O-15 and reconcile those sources before implementing activation.
-
-Read the [decision register](milestone-2-decision-register.md) for available options, tradeoffs, recommendations, approval requirements and impacts. The [implementation plan](milestone-2-implementation-plan.md) contains proposed modules/entities, the finance event effect contract, endpoint inventory, sequence, tests and acceptance criteria. **All recommended business defaults remain proposals. Nothing in these documents approves implementation or a production change.**
+**Verdict. Milestone 2 still has blockers to implementation and to the first migration.** The final owner update settles the core offer, purchase, payment, refund and membership policies. Receipt identity, ledger and payout contracts still require technical closure. O-15 still blocks activation at the runtime authorization boundary. Initial production readiness is separate.
 
 ## Inspection and evidence
 
-| Area | Files inspected | What the evidence establishes |
+| Area | Files reviewed and current evidence |
+|---|---|
+| Decision and planning docs | [Studio decision index](open-decisions.md), [decision register](milestone-2-decision-register.md), and [implementation plan](milestone-2-implementation-plan.md). The 7 November proposals are retained in Git history. The [technical contract review](milestone-2-technical-contracts.md) records proposed controls and closure classifications. |
+| Architecture, authorization and security | [README](../README.md), [architecture review](architecture-review.md), [architecture decisions](architecture-decisions.md), [permission matrix](permission-matrix.md), [API contract](api-contract.md), [business rules](business-rules.md), [data dictionary](data-dictionary.md), [domain model](domain-model.md), [roadmap](implementation-roadmap.md) and [Milestone 0 audit](milestone-0-final-readiness-audit.md). The audit remains a historical baseline. |
+| Backend and data | Foundation [application wiring](../apps/backend/src/app.ts), identity routes and authorization (below), [studio settings](../apps/backend/src/studio/studio.controller.ts), [command guard](../apps/backend/src/platform/commands.ts), [database helpers](../apps/backend/src/platform/database.ts), [Prisma schema](../apps/backend/prisma/schema.prisma), [Foundation migration](../apps/backend/prisma/migrations/20261104000100_foundation/migration.sql), [local DB roles](../infra/postgres/01-local-roles.sh) and [Compose](../compose.dev.yml). |
+| Interfaces and verification | [OpenAPI snapshot](../packages/api-contract/openapi.json), [dashboard relay](../apps/dashboard/app/api/studio/v1/%5B...path%5D/route.ts), [mobile README](../apps/mobile/README.md), [unit](../apps/backend/test/security.unit.test.cjs) and [integration](../apps/backend/test/foundation.integration.test.cjs) tests, [workspace scripts](../package.json) and [Foundation CI](../.github/workflows/foundation.yml). |
+
+Foundation implements active verified-account sign-in, rotating sessions, socket tickets and invalidation, scoped account reads, non-Admin disablement, independent Staff grants, versioned timezone and currency settings, and audited retry-safe administrative writes. Commercial policy `rules` are empty. The ten Prisma models cover identity, settings, audit and retry outcomes. Registration, verification, invitation and recovery are stubs. Activation and commission routes are stubs. No commercial persistence, payment authorization, client credit, membership lifecycle, notification worker or production recovery controls were established by this review. The dashboard relay only exposes two Foundation operations, and mobile delivery is deferred.
+
+## Approved boundaries applied to the plan
+
+| Decisions | Effect |
+|---|---|
+| O-01/O-02 | Saudi Arabia, SAR and Riyadh business dates. Configurable manual payment methods and instructions. Evidence lives outside the app with safe references or a reasoned Admin exception. Verified email, Admin-controlled self-registration, and individually granted Staff actions. |
+| O-03/O-04 | Record, verify and authorize distinctly, even for one Admin. Staff verification awaits Admin authorization. Only explicit allocation of authorized payment or credit funds a purchase. Audited reallocation and Admin partial-payment activation are allowed. Admin can refund eligible credit through the formal workflow. |
+| O-05/O-06 | Refund evidence identifies actual payout or records a reasoned Admin exception. Separate any Admin receivable change. Private offers are client-specific, managed under a dedicated grant, versioned and optionally expiring in Riyadh. Superseded and expired offers cannot be accepted. Admin can withdraw unaccepted offers with reason. |
+| O-07/O-15/O-16 | Both activation paths are Admin-only. Riyadh activation date is default, with future effective start allowed. No automatic grace. Explicit extension preserves original expiry. Scheduled suspension ends on the configured date, open-ended suspension needs Admin reactivation, and concurrent memberships remain independent. |
+| O-17 | Formal acceptance and recording require a dedicated Staff grant or Admin plus exact client agreement evidence. Three evidence methods are approved. Preserve immutable terms, Admin reasoned cancellation and SAR 0 issuance without artificial payment or revenue. |
+| O-11–O-14 | Bilingual in-app/email delivery, replaceable Hostinger SMTP, Admin reminder controls and deduplication. Approved backup retention, recovery targets and warranty. Technical authority is separate from business permissions. Initial go-live remains separately authorized, with audited routine deployments by the designated Technical Administrator after go-live. |
+
+Preserve strict Admin-only commission access, including denial to Coaches. Count attendance as held only after Coach completion submission and Admin verification. Deduct entitlement only after that verification against the booking’s selected membership. Branch operations and online gateways remain outside this phase.
+
+## O-15 authorization conflict
+
+**Business decision resolved. Both stubs now enforce Admin-only access.** At the reviewed Foundation baseline, Staff with the legacy grant could reach the ordinary stub. The public catalog release rejects new assignments and denies access even with a stored legacy grant. Neither stub loads or mutates a membership. Legacy-row retirement and transactional authorization for actual activation remain future work. The table below records the original review evidence.
+
+| Surface | Foundation evidence | Required reconciliation before enablement |
 |---|---|---|
-| Source-of-truth documentation | `README.md`; `docs/architecture-review.md`, `domain-model.md`, `data-dictionary.md`, `permission-matrix.md`, `business-rules.md`, `api-contract.md`, `architecture-decisions.md`, `implementation-roadmap.md`, `open-decisions.md` | Distinguishes Foundation contract, confirmed boundaries, proposed domain model and pending studio values |
-| Historical gates | `docs/milestone-0-final-readiness-audit.md` | B01 receipt identity, B02 finance semantics, B03 funding/grace and catalog B05 remain affected-workflow gates; historical empty-workspace wording is not the current baseline |
-| Database | `apps/backend/prisma/schema.prisma`; the sole `20261104000100_foundation/migration.sql`; migration lock file; `infra/postgres/01-local-roles.sh`; `compose.dev.yml` | Ten Foundation models only; PostgreSQL 17 local service, separate migrator/runtime roles, private schema deny boundary; no finance/membership schema |
-| Backend composition and security | `src/app.ts`, identity controller/DTOs/permissions/access guard/session/password/access-events/realtime, studio controller, platform commands/database/audit/http/config/health, local seed | Current action mapping, deferred endpoints, replay and authorization mechanics, settings limits and actual socket behavior |
-| Interfaces and contracts | `packages/api-contract/openapi.json`, backend OpenAPI generation, dashboard session helper/handlers/relay/page, mobile README | Foundation-only contract; dashboard sign-in surface; relay has two allowed upstream operations; Flutter app is deferred |
-| Tests and toolchain | Backend unit/integration test files, workspace/backend/dashboard package configuration, lockfile, `.github/workflows/foundation.yml` | Existing coverage and CI commands; commercial test coverage does not exist. Integration setup applies migrations to a disposable database |
+| Action and grant vocabulary | [`permissions.ts`](../apps/backend/src/identity/permissions.ts) adds both actions to Admin, allows Staff ordinary activation in `hasAction`, and derives `staffPermissions` from the persisted enum. | Remove ordinary activation from Staff authorization and exclude it from assignable grants. Keep both action names Admin-only. Purchase acceptance and payment permissions cannot substitute. |
+| Persisted grants and grant writer | [`schema.prisma`](../apps/backend/prisma/schema.prisma) defines `StaffPermission.MEMBERSHIP_ACTIVATE` and `StaffGrant`. [Foundation SQL](../apps/backend/prisma/migrations/20261104000100_foundation/migration.sql) includes `staff_permission` and `staff_grant`. [`AccountsController.grant`](../apps/backend/src/identity/identity.controller.ts) resolves the map, permits Admin to upsert the value for Staff, audits, and invalidates access. | Reject new assignment and make existing rows ineffective from the first compatible release. Preserve grant/audit history. Use audited retirement or revocation with access invalidation. Preserve the enum as a compatibility tombstone until older binaries are retired. Block activation enablement during mixed-version rollout. Preserve the historical migration. |
+| Route and transaction checks | [`DeferredController`](../apps/backend/src/identity/identity.controller.ts) binds ordinary and exception routes with `@RequireAction`. [`ExceptionDto`](../apps/backend/src/identity/identity.dto.ts) and the controller enforce a reason. [`AccessGuard`](../apps/backend/src/identity/access.guard.ts) calls [`Sessions.authorize`](../apps/backend/src/identity/session.service.ts), which uses current session/role/grants and OR semantics across actions. The stubs do not use a write transaction. [Commands.run](../apps/backend/src/platform/commands.ts) locks the current actor/session and checks authority and resource for new and replayed writes. That path must be applied to activation. | Preserve distinct endpoints and DTOs. Deny all non-Admin roles at the route and recheck current Admin, session and resource under the command guard on mutation and replay. Preserve reason and separately approved criteria for the exception. |
+| Unit and route tests | [`security.unit.test.cjs`](../apps/backend/test/security.unit.test.cjs) expects Staff with the legacy grant to pass ordinary `hasAction`. [`foundation.integration.test.cjs`](../apps/backend/test/foundation.integration.test.cjs) tests ungranted Staff `403`, Admin grant write `204`, granted Staff reaching ordinary `409`, non-Admin exception `403`, and Admin exception input/stub outcomes. Its settings test also expects the two earlier grant audit writes. | Change the positive Staff expectations to denial. Cover attempts to grant, persisted legacy rows, all non-Admin roles and Admin access to both paths. Decouple the later audit-count assertion from successful activation grant assignment. Preserve independent grants, exception validation and commission denial. |
+| Documentation and API metadata | The prior [permission matrix](permission-matrix.md) and [business rules](business-rules.md) allowed granted Staff. [AD-11](architecture-decisions.md), the [API route families](api-contract.md#route-families), [README](../README.md), [roadmap](implementation-roadmap.md), and historical [audit A01/B03](milestone-0-final-readiness-audit.md) describe the separate exception or activation evidence. [OpenAPI](../packages/api-contract/openapi.json) lists the ordinary and exception stubs and grant route. | The canonical Markdown now states the approved policy and distinguishes Foundation behavior. In the implementation phase align route metadata and regenerate OpenAPI. Keep the historical audit and Foundation evidence traceable. |
 
-The working tree was clean at the start. There were no applicable AGENTS.md instructions found in the project or its ancestor directories. Secrets were not needed for the review; no runtime database contents, remote CI execution or production configuration were inspected.
+The stored `payment.allocate` grant presents a related permission vocabulary mismatch. The Foundation enum and grant route accept it, but no allocation route exists and `hasAction` does not authorize it. The target allocation action is Admin-only. Exclude the legacy Staff value from new assignment and prevent it from conveying future authority. The [permission matrix](permission-matrix.md#foundation-authorization-differences) records both differences.
 
-### Verification performed in this review
+## Remaining gates
 
-| Check | Result / limitation |
+| Class | Open dependency and effect |
 |---|---|
-| Backend TypeScript compile | Passed using `node apps/backend/node_modules/typescript/bin/tsc -p apps/backend/tsconfig.json` |
-| Existing security unit suite | Passed: 3/3 using `node --test apps/backend/test/*.unit.test.cjs`; covers salted Argon2id, independent grants/Admin-only exception and commission boundary, configuration validation |
-| Dashboard production build | Passed using `node apps/dashboard/node_modules/next/dist/bin/next build apps/dashboard` |
-| Workspace command attempt | `pnpm build && pnpm test:unit` did not reach build/tests: available pnpm 11.25.0 attempted dependency synchronization and aborted with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`; repository pins 10.34.9. Existing installed tool binaries were used directly; no reinstall/toolchain/configuration change was made |
-| Existing integration suite and CI | Inspected, **not executed**. Integration setup creates a disposable database and invokes `prisma migrate deploy`, prohibited by this review's no-migrations instruction. CI has install/Compose/migrate/verify/OpenAPI-diff/cleanup steps, but remote CI status is not established here |
-| Database/finance races and isolation | Existing integration assertions reviewed; no live DB privilege or commercial race result is claimed. Commercial tables do not yet exist |
-| Milestone 2 tests | Proposed in the implementation plan, not written or run |
+| Business decisions | O-03 still needs minimums if any, multi-item attribution, Staff self-verification and general unfunded activation criteria. O-04 needs the conversion trigger and the source rule for refunding credit without an original payment. O-06 still needs private-offer reuse and possible Staff withdrawal scope. O-17 needs price composition and cancellation receivable treatment. O-02 onboarding, O-08/O-09 scheduling/attendance and O-10 commissions retain their own gates. Owner questions are recorded [by ID](milestone-2-decision-register.md). |
+| Technical contracts | M2-T01 receipt identity, nonspendable recording and verification, posting/reversal effects, scope, credit provenance and refund reconciliation. M2-T02 exact-version ownership and evidence. M2-T03 purchase-funded activation and effective Riyadh dates, scheduled transitions and once-only grants. M2-T04 separate source-linked membership/session effects. B01–B03 and catalog B05 remain open until the proposed invariants and expected tests are reviewed. |
+| Security and authorization | O-15 remains an architectural/security blocker. Retire legacy activation and allocation grants before exposing those commands. Prove formal purchase acceptance, private offer management, verification, and credit application each enforce their own authority. Preserve current authorization on replay, scoped keys, immutable history grants, and commission isolation. Technical deployment access is separate. |
+| Infrastructure and release | O-11–O-14 still need sender/domain/DNS/TLS, hosting and registry access, category defaults, backup custody/drills, designated technical operator and temporary access controls, launch workload, handover and initial go-live approval. Verify the approved off-VPS retention, maximum 24-hour RPO and 8-hour target RTO with restore evidence. |
 
-Builds establish compile/build viability, not finance correctness or deployed security. No migrations were created or applied, no database/production settings were changed, and no application behavior was modified.
+The [closure and implementation order](milestone-2-technical-contracts.md#closure-and-implementation-order) classifies each contract or branch and identifies its evidence gate. Review the receipt identity and ledger/refund invariants, lock order and O-15 compatibility plan first. Close the outstanding owner questions for affected paths in parallel. Then review catalog acceptance and Riyadh lifecycle boundaries. Once authorized, sequence compatible authorization and shared persistence, catalog and purchases, receipt and ledger operations, activation/lifecycle, and refund execution with separate service reviews.
 
-## Existing implementation baseline
+## Validation and change boundary
 
-### Implemented
-
-- Identity supports active/verified-account sign-in with Argon2id, five-minute access tokens, seven-day absolute refresh sessions, digest-only refresh tokens, atomic rotation/replay revocation, logout and single-use 30-second Socket.IO tickets. Current user/session/role/grants are read from PostgreSQL. Socket invalidation and periodic revalidation are implemented; no business rooms/events are implemented.
-- Scoped account reads, Admin disablement of non-Admin accounts, independent stored Staff grants and Admin settings publication are present. The action map recognizes only currently supported actions: storing all matrix grant values does not enable all future workflows.
-- Settings publication versions timezone and default currency, writes an immutable policy revision and audits it. Commercial `rules` are currently empty; no funding, receipt methods, credit, refund, grace or suspension values are validated or enforced.
-- The common command service claims an actor/action/key, digests command arguments, checks current authority/scope, stores a completed success and audits inside the transaction. PostgreSQL commands use READ COMMITTED, bounded lock/statement/transaction timeouts and one retry for classified transient failures. Existing routes use the scope callback and actor/session lock guards. Commercial account locks, posting kinds and durable money-source uniqueness are not implemented yet.
-- Health/readiness, strict DTO whitelisting, request IDs, no-store responses and request logs without route/body/credential payloads are implemented. Operational audit and policy rows have insert/select runtime privileges without update/delete.
-- The migration creates a restricted `commission_private` schema but no commission tables. Ordinary API, reporting and worker roles have private-schema access revoked; reporting/worker are NOLOGIN placeholders. No commission private connection/service is enabled. The integration source tests ordinary-role denial using a private probe table; this review did not rerun it.
-- Next.js implements sign-in/session restore/sign-out and same-origin cookie/CSRF session handlers. The relay only allows GET `/me` and POST `/auth/socket-ticket`; it is not a commercial API proxy.
-
-### Deferred or absent
-
-| Capability | Actual baseline |
-|---|---|
-| Package catalog, session types, private/custom offers and discounts | Proposed in docs only; no models/controllers/services |
-| Purchase requests/records, snapshots, installment schedules | Proposed only; no schema or endpoints |
-| Manual receipts, verification, lots, allocation, credit, balances | Proposed only; no financial tables or methods |
-| Refund requests/reservations/execution/reconciliation | Proposed only; no persistence or execution workflow |
-| Memberships, activation, validity, suspension, grace, extension, entitlement ledger/reviews | No tables or enabled workflows. Ordinary/exception activation are authorization boundary stubs returning `WORKFLOW_NOT_ENABLED` |
-| Commission workflows | Admin-gated stub returning `WORKFLOW_NOT_ENABLED`; commercial finance must never load private commission data |
-| Client onboarding/recovery | Registration, verification, invitation and reset stubs return `ONBOARDING_POLICY_PENDING`; O-02 remains a real onboarding dependency |
-| Mobile, delivery and release infrastructure | Mobile README only; no Flutter app. No Redis/BullMQ dependency/worker/outbox/delivery implementation. No production deployment established by this review |
-
-The integration source contains 12 tests covering health/self/login, account scope, stub role boundaries, concurrent settings retries/audit, token ownership/DB denial, socket single-use/origin/revocation, refresh replay, waiting-write revocation, disable/logout and the built Next.js session flow. Those are useful Foundation regressions, not evidence that funding, refunds or membership activation work.
-
-## Scope and dependencies
-
-| M2 capability | Review scope / dependency |
-|---|---|
-| Package catalog | Session and time kinds, calendar validity, immutable successor versions, authenticated published public offers, client-owned private quotes, agreed final prices/discount evidence. Minimal session-type reference data is required for future eligibility, without scheduling workflows |
-| Purchases | Own requests, rejection/withdrawal, approval/recording, final agreement snapshot, one-item launch proposal, pending membership issuance and explicit cancellation/adjustment |
-| Installments | Positive schedule portions, local due dates, split funding, replacement history, outstanding balances; no automatic penalties or arrears suspension |
-| Manual payments and credit | Immutable receipts/identity, separate verification, source lots, explicit allocation, partial/multi-purchase settlement, excess unapplied funds, optional approved cash-backed credit conversion/reuse |
-| Refunds | Full/partial original-receipt cash refunds, reserve/claim/evidence/post/reconcile, uncertainty, original preservation, explicit debt and membership effects |
-| Membership/entitlement | Admin activation direction, session grant/time validity, derived expiry/exhaustion, suspension/reinstatement/cancellation, explicit extension/grace, adjustments/reviews/history |
-
-Finance must serialize by client/currency account and preserve source provenance. Membership activation depends on purchase-matched net allocations, not any receipt in the client's account. Refunds depend on the same finance event rules and must preserve reservations during uncertainty. Eligibility must work without Redis or a scheduler; current database time can enforce expiry. Notifications, reminders and realtime business hints are deferred and must not become money-correctness prerequisites.
-
-Real-client acceptance ultimately depends on approved O-02 onboarding and provisioned accounts. It does not require inventing an invitation workflow in M2: isolated fixtures can support backend development once authorized. Scheduling, attendance, coach commissions, branches, online payments, production deployment and tax/accounting integrations remain out of scope. The implementation plan names the narrow future eligibility and entitlement-posting interfaces without implementing those workflows.
-
-## Settled boundaries to preserve
-
-The following questions are already answered by current contracts and should not be reopened as if undecided:
-
-| Question | Existing requirement / remaining policy |
-|---|---|
-| Can one payment cover several installments/purchases? | Yes, the source-lot/allocation-event relation permits many targets within the same client/currency. Exact targeting/order still needs O-04 approval |
-| Can an installment be paid in several transactions? | Yes, many allocations/lots can fund one installment; no one-payment-per-installment restriction |
-| Can price changes alter old purchases? | No. Published versions and agreed purchase-item terms freeze; new terms need a new offer and explicit acceptance |
-| Can private offers belong to individual clients? | Yes. Private package requires one client owner; lists/details/acceptance use that owner. Freeze parent privacy to prevent historical exposure |
-| Does verification activate membership? | No. Recording, verification, allocation and activation remain distinct commands |
-| Can original verified financial rows be edited/deleted? | No. Corrections append compensating events; unverified replacement links the original |
-| Does a cash refund restore sessions or cancel service? | No automatic effect. A separate Admin review decides service consequences |
-| Can an activated membership be suspended? | Yes, Admin lifecycle command. Whether validity freezes remains O-07 |
-| Who decides refunds, extensions and unit corrections? | Existing matrix fixes refund decision/execution/post/reconciliation, membership management and entitlement adjustment to Admin |
-| Are commissions operational finance data? | No. Strict Admin-only private boundary; no generic finance/report/cache/worker/notification access |
-
-AD-03/04/12 and much of the data dictionary remain labeled proposed. This review recommends carrying their existing finance-event, reservation and snapshot designs forward; it does not relabel them approved architecture records. Confirm those technical contracts in design review without substituting new abstractions.
-
-## Unresolved decisions and recommended options
-
-The register provides options with advantages/disadvantages and database, permission, API, reporting and future-workflow impacts for every business decision. The practical recommended defaults are:
-
-| ID | Approval choice and reason |
-|---|---|
-| O-01 | Confirm one currency and short method list; Africa/Cairo, EGP, cash/bank transfer are candidates, not approved values. Local calendar-day validity and local due dates give clients consistent dates; no FX |
-| O-03 | Full net verified purchase funding, one item per purchase at launch, separate verifier, unique source identity across keys/clients. This prevents partial funding from activating several items and prevents duplicate receipts. Keep Admin exceptions disabled until categories/evidence are approved |
-| O-04 | Explicit operator allocation with oldest-due suggestion; partial/multiple payments allowed. Preserve excess as unapplied, permit explicit cash-backed credit conversion/reuse if approved, no promotional issuance/expiry/cash-out. This retains provenance without hiding excess money |
-| O-05 | Reserved, evidenced Admin cash refunds and compensating corrections. Refund does not forgive reopened debt or decide service effects. This separates cash, contract and entitlement history |
-| O-06 | Final agreed price in immutable versions; private client quote with explicit expiry; reject superseded/expired acceptance. Admin private pricing at launch via unassigned Staff grants. No arbitrary purchase discount override. This protects private terms and agreements |
-| O-07 | Start validity at activation; suspension clock continues; no automatic grace/rollover. Historical unused units remain unusable after expiry unless an Admin explicitly extends; bounded grace remains separate from formal expiry. This avoids hidden entitlement changes |
-| O-15 | Admin-only ordinary activation as expressly requested, with canonical matrix/code/test reconciliation before implementation. Preserve the separate exception command |
-| O-16 | Allow concurrent memberships with independent units/validity; later booking selects one. This fits the model without pooling or automatic replacement |
-| O-17 | Atomic request acceptance/recording requiring both named actions; explicit agreement evidence; immutable recorded terms and explicit cancellation; no zero-price/tax/stacking-discount engine. This avoids half-recorded agreements and implicit financial treatment |
-
-O-15–O-17 are appended to [open decisions](open-decisions.md); original entries are preserved. O-15 is a conflict requiring source reconciliation, O-16 is a missing launch policy rather than a schema cardinality question, and O-17 resolves incomplete purchase lifecycle semantics. Other questions are refinements of existing O-IDs, avoiding duplicate decisions.
-
-### Technical design gaps before migrations
-
-- **B01:** Add a studio-wide receipt identity guard and correction-root semantics. Current optional external reference and HTTP keys cannot stop duplicate physical receipts. Define normalization per method and fail uncertain verification closed.
-- **B02 / M2-T01:** Review a closed finance kind/reference/effect/reversal matrix, target balance equations, frozen refund bucket, receipt-cap reservation and one execution claim/terminal posting. The plan supplies a candidate matrix and reconciliation example; no SQL exists yet.
-- **B03 / M2-T03:** Approve purchase/item threshold scope, exact activation date rule and grace intervals/revocation/precedence. Store historical evaluated funding and apply the initial grant only once.
-- **Catalog B05 / M2-T02:** Freeze parent privacy and client ownership after publication; preserve exact request/version ownership under the package lock.
-- **M2-T04:** Funding corrections also need a service review. The dictionary's review only references a refund; extend it to a refund-or-funding-reversal source instead of adding another review system.
-- **Policy and permission binding:** Empty Foundation rules cannot enable a workflow. Expand only approved policy schema and required action vocabulary. Foundation's `RequireAction`/`Sessions.authorize` list has **OR semantics**; accepting a request with both review and record authority must explicitly check each action inside the guarded transaction, not assume passing two names means AND.
-- **Immutable-table lock privilege:** PostgreSQL row locking needs suitable UPDATE privilege on a lock target. Design tightly limited projection/guard columns without granting mutable financial facts or history. Review migrations/default grants in the later implementation task.
-
-## Risks and security considerations
-
-| Severity / risk | Required control and evidence |
-|---|---|
-| Critical — double receipt, allocation or cash return | Studio-wide source identity, account serialization, source/target caps, durable posting uniqueness, frozen reservations and one execution claim. Real PostgreSQL concurrent tests required |
-| Critical — false activation | Same-purchase net verified cash-backed funding under account lock, approved threshold and one-item attribution, distinct Admin exception, historical evidence; race activation versus refund/reversal |
-| Critical — financial history corruption | Immutable receipt/snapshot/event/ledger facts, source-linked compensation, no deletion or writable balance; runtime DB UPDATE/DELETE denial and reconciliation oracle |
-| High — authority drift | Reconcile O-15; no grant inference among record/verify/allocate/read/review/record; explicitly conjunctive checks when required; current user/session/grants rechecked under locks and on replay |
-| High — private offer or cross-client disclosure | Query-level owner predicates, scoped composite FKs, exact parent/version joins, freeze published privacy; consistent 403/404 and safe list/detail/error/replay DTOs |
-| High — cash/debt/service conflation | Separate receipt collection, allocation, charge adjustment, refund cash and membership review; clear outstanding and historical eligibility projections |
-| High — refund uncertainty after crash | Persist claim before external handover; no money jobs; keep reservation and execution evidence, require reconciliation before any new payout attempt |
-| High — commission leakage through new finance endpoints | No commission queries/private connection on commercial paths. Dedicated allowlisted DTOs and no-store. No identifiers, amounts or aggregates in general reports, logs, audit, caches, workers, outbox, sockets or notifications; negative role/DB/data-path regression tests |
-| Medium — date/expiry drift | Stored applied boundaries and policy, local-date validation, post-lock DB clock, exclusive ends and DST tests; no dependency on worker cleanup |
-| Medium — unstated correction/discount authority | Reuse only existing Admin correction actions with explicit scope; final-price private version rather than purchase override; policy approval and audit reasons |
-
-Staff finance reads can expose eligible single-studio financial records only through the named grant, not because the caller can record a payment. Client reads expose own records through finance account/purchase/membership ownership. Membership and entitlement reads are Admin/client-own in the canonical matrix, with no Staff read grant. Operational audit access remains distinct from finance access and never includes private commission audit. Sensitive receipt evidence should use safe references, not loggable free-form credentials or uploaded secrets.
-
-No commissions are enabled in M2. The current private-schema denial boundary is useful but does not prove future serializer/cache/delivery isolation. Add probes for each path actually introduced and retain full commission enablement testing for Milestone 4. No new finance worker or notification path is needed just to complete M2.
-
-## Implementation prerequisites and readiness verdict
-
-Before implementation authorization, obtain a decision record for O-01/O-03–O-07/O-15–O-17 with selected defaults/deviations, approving owner/date and effective policy; explicitly mark any optional paths disabled. Do not convert this report into that approval. Resolve the activation-source conflict and purchase/private-management permission interpretations in canonical contracts. Review the proposed finance event matrix, receipt identity guard, scoped keys, refund state machine and grace/review model; use those to close affected audit findings with later tests.
-
-Before acceptance, the implementation task must add actual persistence/API slices, database grants/constraints and commercial tests, run the pinned toolchain plus complete Foundation/M2 integration/race suite, reconcile finance/entitlement history and document uncertain-payout handling. O-02 remains a separate real-onboarding dependency. O-08/O-09 future commitment/attendance policies and O-10–O-13 interface/release decisions are not excuses to add those workflows now; keep their interfaces explicit and their scope deferred.
-
-**Verdict:** the implementation approach is defined, but business approvals and several integrity contracts are blockers to starting the complete milestone. After those are recorded and implementation is explicitly authorized, the sequence in the plan is proportionate to the current project. No production feasibility, deployment or commercial correctness certification is claimed by this documentation review.
-
-## Deliverables and change boundary
-
-Created:
-
-- `docs/milestone-2-readiness-review.md` — this evidence, decision, risk and prerequisite report.
-- `docs/milestone-2-decision-register.md` — existing decision refinements, three new decisions, options, recommendations, impacts and approval gates.
-- `docs/milestone-2-implementation-plan.md` — modules, entity design, finance effects, API inventory, sequence, tests and acceptance.
-
-Modified only `docs/open-decisions.md`: appended O-15–O-17 and a dated review cross-reference while preserving O-01–O-14. No application, migration, permission matrix, architecture, CI or deployment file was changed. Build artifacts are ignored local verification output. **Stop here; wait for explicit approval before implementing Milestone 2.**
+This round reviewed the Foundation authorization code, metadata and test expectations without changing runtime behavior. The documentation check covers local references, historical decision IDs, reconciled policy wording, and the unchanged non-documentation diff. No application source, Prisma schema, migration, test, OpenAPI snapshot or deployment configuration changed. No migration was run. No commit or push was made.

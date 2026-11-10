@@ -1,47 +1,48 @@
 # Business rules and transaction boundaries
 
-Confirmed requirements are marked **Confirmed**. Technical choices here are **Proposed** unless otherwise noted. Studio values and launch policies remain in [open decisions](open-decisions.md).
+Confirmed requirements are marked **Confirmed**. Technical choices here are **Proposed** unless otherwise noted. The [studio decision index](open-decisions.md) tracks policy status. The [readiness review](milestone-2-readiness-review.md) tracks implementation.
 
 ## Identity and catalog
 
-**Confirmed.** Admin can create a client. Clients can self-register and verify email. Clients cannot self-assign elevated roles. Proposed flow: Admin-created accounts receive a time-limited setup link, while self-registered accounts remain pending verification. Store token digests, consume tokens once, and revoke sessions when disabling an account. Approval or enablement after verification remains a studio decision.
+**Confirmed.** Admin can create Client accounts. Clients may self-register when Admin enables it. Require email verification. Admin recovery uses verified email. Mandatory Admin MFA is deferred. Staff start without sensitive permissions. Only Admin grants each action and sensitive actions are audited. Invitation and post-verification enablement remain open under O-02.
 
-Publish the version and eligible session types in one transaction under the package lock. Published business fields are immutable. A private version belongs to its package's client. A request refers to the version the client saw. A purchase item copies the agreed price, currency, validity, and allowance. A changed offer requires a new version and explicit acceptance.
+**Confirmed.** Accepted purchases retain immutable package, services, price/currency, session/duration, validity, installment, discount and custom terms. Admin may cancel with a reason even after activation or partial use. Review membership consequences separately. Preserve usage and finance history. Cancellation never automatically refunds or changes credit. Admin can issue SAR 0 purchases with a recorded purpose, normal service terms and no artificial payment or revenue.
+
+**Confirmed.** Private offers are client-specific. Staff need the dedicated private management grant. Issued terms are immutable and changes issue a new version. Expired or superseded versions cannot be accepted. Expiration is optional and uses Riyadh time. Admin can withdraw an unaccepted offer with reason. Preserve prior versions and accepted purchases. The proposed locking and scoped reads are in the [private catalog contract](milestone-2-technical-contracts.md#private-catalog-and-offer-privacy).
+
+**Confirmed.** Admin or Staff with dedicated authority formally accepts and records the purchase. Client intent alone is insufficient. Record agreement via explicit in-app confirmation, a signed agreement reference, or a supported verbal note. Preserve method, client, purchase, agreed terms, timestamp and responsible person. Electronic signatures are unnecessary for MVP.
 
 ## Financial settlement
 
-**Confirmed.** Manual receipt recording, verification, and activation are separate commands. Keep original payment and refund records. No balance is overwritten.
+**Confirmed.** Use Saudi Riyal (SAR) and configurable manual methods with historical method values and per-method instructions. Share evidence separately and record a reference when available. Only Admin can authorize a missing-reference exception with a reason. Keep recording, verification, final authorization, allocation and membership activation separate.
 
-| Operation | Transition and effect |
+| Operation | Approved boundary and proposed posting effect |
 |---|---|
-| Record / correct | Store immutable reported payment facts. An unverified correction links a replacement and blocks verification of the superseded receipt. Verified corrections use compensating events. |
-| Verify | Under the finance lock, create one verified origin event and one cash-backed lot. Funds start unapplied. |
-| Allocate | Post from a lot bucket to a purchase and optional installment. Validate remaining lot funds and target balance. Installment allocation reduces the purchase receivable once. |
-| Convert or spend credit | Conversion moves funds to the available-credit bucket within the same lot. Spending records the source bucket. Issuance, expiry, and cash-out remain gated pending studio policy. |
-| Reverse | Reference the original event and enforce its unreversed remainder. Allocation reversal restores the original lot bucket and reopens the receivable. Verification reversal must account for dependent allocations, refunds, and reservations. |
-| Request and approve refund | REQUESTED → REJECTED or APPROVED_RESERVED. Under the account lock, reserve funds and original receipt capacity. Link any necessary allocation reversals. |
-| Execute and post | APPROVED_RESERVED → EXECUTING → POSTED. One Admin claims execution before outside payment. On ambiguity enter RECONCILE_REQUIRED and retain the reservation. Post only with evidence or void after establishing nonpayment. Jobs never execute or retry cash movement. |
-| Review membership effect | A separate Admin review can record no change, a validity action, or an entitlement adjustment. A cash return alone changes neither membership nor consumed sessions. |
+| Record | Admin or independently authorized Staff records original facts. No balance effect. |
+| Verify | Admin or specifically delegated Staff records verification. Admin may verify their own recording. Staff verification awaits Admin review and authorization. |
+| Authorize | Admin records final decision, including review of delegated verification. Preserve recorder, verifier, reviewer and authorizer with separate timestamps, even when one Admin handles all steps. Proposed posting creates one cash-backed lot and origin under the finance lock only at authorization. |
+| Allocate | Admin manually selects one or more purchases/installments and amounts. Several payments can fund one target. No automatic oldest-purchase allocation. Only payments and credit explicitly allocated to the purchase count toward funding. Audit explicit reallocation. Installment allocations reduce outstanding once. |
+| Service installments | Preserve original due date and amount. Admin date revisions require reason and audit. Derive overdue after the due date while a balance remains. |
+| Convert or spend credit | Excess can become non-expiring credit. Admin applies all or part to selected future purchases/installments. Clients see their balance and history. Admin increases or decreases credit through reasoned separate ledger transactions. Only Admin can authorize credit cash-out through the formal refund workflow with a reason and linked ledger effects. The conversion trigger and source linkage for manual credit remain open. |
+| Correct | Staff with the designated grant can request a correction. Admin initiates and authorizes linked reversal and correcting transactions. Change balances only upon authorization. Keep original facts and history. |
+| Refund | Admin reviews full or partial refund individually. Post confirmed cash return separately and link original payment and actual payout reference or reasoned Admin exception. Approval alone moves no cash. An Admin may separately authorize a reasoned receivable adjustment. Refund never automatically reduces installment obligations. |
+| Review service effects | Admin separately decides membership and remaining-session consequences. Refund alone does not cancel or change units. Audit decisions and adjustments. |
 
-An example in one currency: verification of 120 can fund installment A with 60 and installment B with 40, leaving 20 unapplied. Another receipt can contribute to either installment. Returning 30 may require an explicit 10 allocation reversal. That reopens 10 of receivables unless a separately authorized purchase adjustment changes what is owed.
-
-A durable posting key identifies each event. Reject key reuse with different input. All finance references share client/currency scope, and an installment must belong to its target purchase. Lock the finance account before validating aggregate balances. Posted refunds plus active reservations cannot exceed the verified receipt amount net of valid receipt reversals. A cash refund draws on its approved refundable bucket. Internal credit restoration does not return cash. Reconcile balances from typed events, source lots, and current reservations.
+Use a durable posting key per event, scoped client/currency references and an account lock for aggregate validations. The [finance contract](milestone-2-implementation-plan.md#finance-event-contract-proposed) proposes origin, credit, reversal and refund controls. No balance is overwritten. Keep external payout outside the database transaction. A source-linked refund or correction preserves historical activation evidence.
 
 ## Membership and entitlement
 
-| Transition | Authority and effect |
+| Transition | Approved authority and effect |
 |---|---|
-| Issue PENDING_ACTIVATION | Authorized purchase recording. No usable entitlement. |
-| Activate | Admin or explicit staff grant. Require net verified funding for that purchase at the approved threshold or a documented Admin exception. Staff cannot authorize the exception. Validate funding under the account lock. Store evidence, policy, actor, and reason where required. Set validity and append the initial session grant once. |
-| ACTIVE → SUSPENDED → ACTIVE | Admin. Record reason and effective times. Whether time freezes is unresolved. Reinstatement cannot silently alter formal expiry. |
-| Pending, active, or suspended → CANCELLED | Admin. Proposed terminal state. Preserve balances, booking history, and ledger. Existing booking effects require an explicit decision. |
-| Extend or authorize grace | Admin. Extension changes formal validity through an event. Grace is a dated exception and preserves formal expiry. |
-| Expire or exhaust | Derived from time or balance. Neither alters financial settlement. Unused sessions remain in history. |
-| Adjust entitlement | An accepted verification, authorized grant/adjustment event, or explicit entitlement review authorizes a new signed entry. Reversals link to original entries. No edits to original entries. |
+| Issue PENDING_ACTIVATION | Dedicated formal acceptance and recording with agreement evidence. No usable entitlement. SAR 0 issuance requires Admin and a purpose. |
+| Activate | **Admin only.** Admin may activate with partial funding. Count only authorized payments and credit explicitly allocated to the purchase, with funding attribution verified under lock. Outstanding balances remain due. Preserve actual approval timestamp and default to the activation date in Riyadh, or record a future effective start. A reasoned SAR 0 purchase uses its own basis. Payment verification/authorization never activates service. The separate general Admin exception remains gated. Store the evidence and issue initial units once. See [O-15](milestone-2-readiness-review.md#o-15-authorization-conflict). |
+| Suspend and resume | Admin records reason, start and optional end date. End-dated suspension reactivates automatically on the configured date. Open-ended suspension requires Admin action. Validity continues unless Admin separately extends it. Reactivation cannot make an expired or terminated membership usable. |
+| Extend | Admin may extend validity without a new purchase or payment. Preserve original expiry, reason and audited revision. Admin may explicitly extend after expiry as an exception. There is no automatic grace. |
+| Terminate | Admin can terminate an active membership before expiry. This is separate from purchase cancellation. Independently review remaining units and financial effects. |
+| Expire or exhaust | Riyadh calendar dates govern validity. The entire final valid day is included. Unused units become unusable at expiry unless validity is explicitly extended. Preserve historical units and financial history. |
+| Adjust entitlement | An accepted Admin verification, authorized grant/adjustment or explicit review can authorize a signed entry. Link reversals to originals. Preserve all history. |
 
-At approval, recheck active lifecycle, validity or explicit grace, allowed session type, units, and approved financial eligibility. Proposed checks cover approval and service time. Counting confirmed commitments against available units can prevent promising the last session twice without posting a debit. Commitment expiry and late exceptions require approval.
-
-For ordinary activation, count only net applied funds traceable to verified payments for that purchase. Unapplied money and an unrelated verified receipt do not qualify. Capture the evaluated amount and currency with the activation evidence. A later refund or funding correction preserves that historical activation decision and opens a separate review when applicable.
+Clients may hold several active memberships with independent validity, units, funding, attendance and adjustments. Future booking identifies the exact membership. Use that membership for eligibility and any attendance deduction. At approval, recheck its lifecycle, validity, allowed session type, units and approved financial eligibility. Proposed checks cover approval and service time. Counting confirmed commitments against available units can prevent promising the last session twice without posting a debit. O-08 governs commitment expiry, late exceptions and confirmed-booking consequences of lifecycle changes.
 
 ## Scheduling and attendance
 
@@ -52,7 +53,7 @@ For ordinary activation, count only net applied funds traceable to verified paym
 | HELD → CONFIRMED / REJECTED / WITHDRAWN / EXPIRED | Authorized approval rechecks expiry, eligibility, capacity, availability, and client overlap/limit. Terminal non-confirmation releases capacity. Effective expiry is based on database time. |
 | Cancellation or move requested | The confirmed participant stays unchanged. Rejection or withdrawal changes only the request. Approved move locks both slots and commits the replacement and decision together. A failed move preserves the original seat. |
 | Coach replacement | Release old reservation and insert replacement atomically. Preserve both records. Approved unavailability flags affected bookings for explicit action. Ordinary replacement stops after service starts. |
-| Attendance submitted or returned | Assigned service coach submits a per-participant revision. Late submissions are flagged and still accepted for Admin review. A return requires a reason. Resubmission appends a revision. No debit. |
+| Attendance submitted or returned | Assigned service coach submits a per-participant revision. Attendance counts as held only after Coach completion submission and Admin verification. Late submissions are flagged and still accepted for Admin review. A return requires a reason. Resubmission appends a revision. No debit. |
 | Admin verifies or corrects | Verification records the accepted charge and policy. For a chargeable session package, post the debit in the same transaction. A correction keeps the last accepted result until accepted and then appends only the delta. Time-based or nonchargeable results have zero charge. |
 
 ### Hold expiry and seat locks
@@ -77,7 +78,7 @@ Use the [scoped FK and ownership map](data-dictionary.md#scoped-foreign-keys-and
 - Race reschedules for one replacement and a move against cancellation. Assert rejected changes preserve the original and successful moves commit only one seat change.
 - Submit late group attendance for different participants. Return, resubmit, verify concurrently, and correct. Assert historical attribution, effective result, and exactly one applicable unit delta.
 - Race allocations against a lot and installment, refund reservations against one receipt, and two execution claims. Reject mismatched clients, currencies, and installments. Reconcile an uncertain refund without paying twice.
-- Verify unrelated payment cannot activate membership, a staff grant cannot use an Admin exception, and verified funding never triggers automatic activation.
+- Verify unrelated or unauthorized payment cannot fund activation, all Staff grants deny both activation paths, and verification/authorization never triggers automatic activation.
 - Publish a successor after a private offer is purchased and verify unchanged purchased terms and ownership isolation.
 - Exercise every denied commission surface in the [permission matrix](permission-matrix.md). Lose Redis after enqueue and restore from backup with delivery disabled.
 

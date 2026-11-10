@@ -1,182 +1,157 @@
 # Milestone 2 decision register
 
-Review date: 7 November 2026. Baseline: `d8390ab` (Foundation). **Review only; no Milestone 2 implementation is authorized.**
+Updated 10 November 2026. Business approval comes from the project owner’s consolidation and final decision briefs. Repository baseline is `055a67d` on `main`, with Foundation implemented in `d8390ab`. This record supersedes conflicting recommendations in the 7 November review. The [decision index](open-decisions.md) preserves O-01–O-17. The [readiness review](milestone-2-readiness-review.md) distinguishes source evidence from future work. No production policy revision or feature is established by the brief.
 
-“Recommended” means an option for approval, not an approved policy. Existing O-IDs retain their history in [open decisions](open-decisions.md). This register expands only commercial decisions. See the [readiness review](milestone-2-readiness-review.md) for evidence and the [implementation plan](milestone-2-implementation-plan.md) for proposed entities, APIs, finance effects, and tests.
+## O-01
 
-## Decision index
+**Approved — business configuration.** Saudi Arabia, Saudi Riyal (SAR), Asia/Riyadh (UTC+3). Admin can add, edit, enable and disable any locally applicable manual payment method, with per-method instructions. Cash, bank transfer, Mada and STC Pay are examples. Payments retain the historical method. Evidence is shared outside the app. Record a reference when available. Admin may authorize a missing-reference exception with a reason. The exception concerns evidence, separate from membership activation authority. Membership validity uses Riyadh calendar dates and includes the entire final valid day.
 
-| ID | Decision | Current status | Recommended default | Owner approval required | Implementation gate |
-|---|---|---|---|---|---|
-| O-01 | Currency, receipt methods, studio date semantics | Pending; Foundation only stores timezone/default currency | One currency, EGP if confirmed; Africa/Cairo if confirmed; cash and bank transfer if confirmed; local business dates and exclusive validity end | Yes: values and customer-facing date rule | Policy validation, money and date handling |
-| O-03 | Funding threshold, receipt identity, verification controls | Pending; separation of recording/verification/activation is confirmed | Full purchase funding; one item per purchase at launch; globally deduplicated receipts; independent verifier | Yes | Payment verification and activation |
-| O-04 | Allocation, excess funds, credit | Pending policies; many-to-many allocation is already documented | Explicit allocations with oldest-due suggestion; excess remains unapplied; explicit cash-backed credit conversion/reuse; no promotional issuance, expiry, or cash-out | Yes | Allocation, balances, credit |
-| O-05 | Refund consequences, evidence, correction authority | Pending policies; preservation and compensating history are confirmed | Admin-only reserved cash refunds; receivable changes and membership decisions remain explicit; correction by compensation | Yes | Refunds, receipt reversals, purchase adjustments |
-| O-06 | Private offers, version acceptance, pricing authority | Pending policies; exact-version snapshots already documented | Admin handles private pricing at launch; immutable published ownership; explicit private expiry; reject superseded requests; versioned final prices | Yes | Catalog publication and purchase review |
-| O-07 | Validity, suspension, cancellation, grace, remaining units | Pending; Admin lifecycle control and historical units are documented | Start on activation; suspension clock continues; no automatic grace or rollover; explicit extensions and bounded grace; terminal cancellation | Yes | Membership lifecycle and eligibility |
-| O-15 | Conflict over ordinary activation authority | Newly identified discrepancy | Plan ordinary activation as Admin-only, as requested in this review; reconcile canonical documents/tests before implementation | Explicit review instruction supplies direction; owner must resolve the conflicting sources before enablement | Activation permission contract |
-| O-16 | Concurrent memberships and later selection | Newly identified policy gap | Allow several active memberships; keep validity and units separate; later booking names one membership | Yes | Membership issuance/activation |
-| O-17 | Purchase acceptance, cancellation, and price composition | Newly identified policy gap | Atomic acceptance/recording; no direct editing after recording; explicit cancellation; one final price, no tax engine; no free purchases initially | Yes | Purchase and installment lifecycle |
-| M2-T01 | Finance event effects and refund reservation/execution semantics (audit B02) | Technical contract incomplete | Closed event matrix, receipt identity guard, frozen reservation bucket, one execution claim and terminal posting | Technical review; owner approves O-03–O-05 business choices, not SQL details | Finance design review |
-| M2-T02 | Catalog privacy invariants (catalog part of audit B05) | Technical safeguard missing from schema contract | Freeze published package visibility/client; new identity for reassignment | No new business approval; preserves existing ownership boundary | Catalog design review |
-| M2-T03 | Grace history, activation evidence, and membership projections (audit B03) | Technical contract incomplete | Explicit grace interval/revocation; one initial grant; derived expiry; versioned policy | Owner approves O-03/O-07 values; technical details need design review | Entitlement design review |
-| M2-T04 | Review after funding correction | Existing rule has no complete proposed relationship | Extend existing entitlement review to reference either a refund or a funding-reversal event | No new financial authority; owner approves O-05 effects | Correction design review |
+**Implementation dependencies.** A versioned method/evidence contract, stable method history, method-specific receipt identity, currency input precision and local date conversion. Represent end-of-day validity as an exclusive next-midnight instant, using the applied timezone and policy. Foundation publishes timezone/default currency with empty commercial rules. The Egypt examples in Foundation are fixtures.
 
-O-15–O-17 are the only new business entries. Receipt uniqueness belongs to O-03, multiple payments/allocations and schedules to O-04, correction authority to O-05, and activation timing to O-07; those do not need duplicate O-IDs.
+## O-02
 
-## O-01 — Currency, payment methods, and service dates
+**Approved in part — client onboarding and access.** Admin can create Client accounts. Clients may self-register when Admin enables public registration. Require email verification. Admin password recovery uses the verified email address. Staff start with no sensitive permissions. Admin grants each action individually. Staff cannot grant permissions to themselves or another Staff member. Audit sensitive actions. **Deferred:** mandatory Admin MFA.
 
-**Current position.** [Open decisions](open-decisions.md) leaves timezone, currencies, methods, dates and cutoffs pending. The [dictionary](data-dictionary.md#conventions) already specifies UTC instants, separate business dates, `numeric(19,4)`, decimal-string serialization and currency validation. Foundation's settings controller accepts only timezone/default currency and publishes `rules: {}`. Tests using Africa/Cairo and EGP do not approve them. Scheduling cutoffs remain O-08/O-09 and are outside this review.
+**Owner question.** How should Admin-created clients receive setup access, and does verified email itself enable sign-in in each onboarding path? This determines when accounts become usable. For release, who can provision the initial production Admin and manage Admin account lifecycle? This determines initial access and prevents loss of the only Admin account. See O-14.
 
-**Why it matters.** The same due date or “30 days” can mean different things near midnight and daylight-saving changes. A currency code alone does not specify accepted receipt methods or permitted precision.
+**Implementation dependencies.** Define verified/active state transitions, registration policy checks, purpose-bound single-use invite/verification/reset tokens, collision and abuse handling, session revocation and recovery audit. Foundation already checks current grants and verified active accounts and provides audited Admin grant changes. Registration, invitation, verification and recovery are still stubs.
 
-| Option | Advantages | Disadvantages |
+## O-03
+
+**Approved — payment authority.** Admin or individually authorized Staff may record payments. Specifically authorized Staff may perform initial verification, which always needs subsequent Admin review and authorization. The same Admin may record, verify and authorize a payment. Record, verify and authorize remain distinct events and statuses. Preserve recorder, verifier, reviewer and authorizer and their timestamps. Recording alone never means verification or authorization.
+
+**Approved — purchase-specific funding.** Count only authorized payment amounts and client credit explicitly allocated to that purchase. Funding never moves implicitly. Reallocation requires an authorized, audited operation. Admin may separately activate a partially funded purchase. Keep remaining debt visible. Payment and credit operations never activate service.
+
+**Owner questions.**
+
+- What minimum allocation, if any, qualifies for partial-payment activation, and how should funding be attributed if one purchase contains several membership items? This prevents the same funds from qualifying unrelated items.
+- May a Staff recorder also perform the initial verification? Same-Admin authority is approved. This determines the Staff workflow while preserving the final Admin checkpoint.
+- Under what conditions and with what evidence may Admin activate without qualifying funding outside SAR 0 issuance? The separate activation exception stays gated.
+
+**Implementation dependencies.** [M2-T01 and M2-T03](milestone-2-technical-contracts.md) cover receipt identity, authorization and reallocation effects, source evidence, and the eligibility snapshot. B01–B03 remain technical gates. Foundation has no commercial payment implementation.
+
+## O-04
+
+**Approved — allocation, installments, credit and corrections.** Admin explicitly selects purchases or installments. Payments can be split across targets, and a target can receive multiple full or partial payments. Automatic oldest-purchase allocation is prohibited. Keep original receipts and allocations traceable. Installments are overdue when the due date passes with a balance. Only Admin revises due dates, with a reason and audit record. Preserve original dates and amounts.
+
+Overpayment may become non-expiring credit. Only Admin applies credit in full or in part to selected future purchases/installments, or increases/decreases it with a reason and separate ledger postings. Clients can see balances and transaction history. Admin may authorize a formal cash refund of all or part of credit, with a reason. Clients cannot independently cash out. Reduce credit through linked financial transactions and preserve its history. Decide membership consequences separately.
+
+Staff with the named grant may request corrections. Admin initiates and authorizes linked reversals and corrections. Change balances only after authorization. Preserve and audit original records.
+
+**Owner questions.**
+
+- Does excess become credit automatically or only when Admin chooses to convert it? This determines when the balance becomes available as credit.
+- What source should a credit refund reference when the credit was issued manually and there is no original payment? O-04 approves credit refunds and O-05 requires original-payment linkage. The answer determines whether and how this source can be supported without fabricating a receipt.
+
+**Implementation dependencies.** [M2-T01 and M2-T04](milestone-2-technical-contracts.md) cover typed ledger effects, cash and manual credit provenance, refund holds, explicit allocation/reallocation, and due-date history. Cash-backed credit refund design can be reviewed while the original-payment rule for manual credit is clarified.
+
+## O-05
+
+**Approved — refunds, evidence and receivables.** Admin reviews full and partial refunds individually. Refund is a separate financial transaction. Preserve original payment and installment history. Admin independently decides membership and remaining-session consequences. Audit decisions and adjustments.
+
+Record a reference to the actual payout, such as a bank transfer reference, cash receipt number or transaction ID. Actual proof is shared outside the application. Admin can approve a missing-reference exception with a reason. Link the evidence to the refund transaction and original payment. O-04 tracks the open linkage question for credit without an original payment.
+
+Refunding cash does not automatically reduce what is owed on installments. Only a separate reasoned and audited Admin adjustment can reduce the receivable. Prevent double counting. When unallocating applied funds is necessary to fund a refund, record that as a separate posting that reduces settlement, distinct from a change to the contractual amount owed.
+
+**Implementation dependencies.** [M2-T01 and M2-T04](milestone-2-technical-contracts.md) cover payout evidence and exceptions, reservation, execution, failure/reconciliation, source limits and separate receivable and service effects.
+
+## O-06
+
+**Approved — private offers.** Admin can create, modify and withdraw private offers. Staff manage private offers only with a dedicated permission granted by Admin. Clients see only private offers intended for their accounts. Admin/Staff access is permission-controlled. Expiration is optional and uses Asia/Riyadh. An offer without an expiry stays available until withdrawal or supersession. Expired or superseded versions cannot be accepted. Issue a new version for changes, preserve old versions for audit, and never overwrite accepted offers or purchases. Admin can withdraw an unaccepted offer and must give a reason.
+
+**Remaining scope questions.** Does the Staff management grant include withdrawal? Admin withdrawal is approved and the proposed route stays Admin-only pending any explicit delegation. Can one private offer be reused for multiple purchases? The proposed acceptance constraint treats a private offer as a single agreement. Clarify that cardinality before fixing a unique constraint.
+
+**Implementation dependencies.** [M2-T02 and the Riyadh date contract](milestone-2-technical-contracts.md#saudi-date-and-time-contract) cover owner predicates, immutable issued terms, exact-version locking, withdrawal and expiry boundaries, and separate permissions for management and acceptance. B05 still requires technical review.
+
+## O-07
+
+**Approved — membership and entitlement.** Only Admin activates. Validity starts on the Riyadh calendar date of Admin activation by default. Admin may choose a future effective start date at activation. Preserve activation timestamp and effective start date. Recording and verification do not start membership validity. Keep the entire final valid day.
+
+Admin can suspend with a reason and start date. End-dated suspension reactivates automatically on its configured end date. Open-ended suspension requires manual Admin reactivation. Validity continues during suspension unless Admin separately extends it. Unused sessions expire with membership validity. There is no automatic grace. Admin can explicitly extend validity without a new purchase or payment, including as an exception after expiration. Require reason and audit history and preserve the original expiration date. Admin can terminate an active membership before expiry, separately from purchase cancellation. Review remaining sessions and financial consequences independently and preserve all lifecycle and adjustment history.
+
+**Implementation dependencies.** [M2-T03 and M2-T04](milestone-2-technical-contracts.md) cover effective boundaries, dated transitions, original and revised expiry, source-linked service effects and once-only initial grants. Confirmed booking consequences remain under O-08.
+
+## O-08
+
+**Unresolved — scheduling.** Milestone 3. Waitlisting remains deferred pending scope and order.
+
+**Owner question.** What hold duration, client limits, coach buffers, replacement holds and affected-booking rules should launch, and is a ranked waitlist in scope? These determine capacity and how existing commitments are handled after lifecycle changes.
+
+## O-09
+
+**Unresolved — attendance exceptions.** Attendance counts as held only after Coach completion submission and Admin verification. Entitlement deduction occurs only after Admin verification for the selected membership.
+
+**Owner question.** What late submission deadline, no-show/late-cancellation charges, insufficient-entitlement behavior and correction recipients apply? These determine which verified outcomes consume sessions and how exceptions are handled. Milestone 3.
+
+## O-10
+
+**Unresolved — commission distribution.** Commission data remains strictly Admin-only, including when the Coach is the recipient. Automatic calculation is deferred.
+
+**Owner question.** Who is eligible for manual commission and how may Admin distribute or reverse it? This determines the private recipient model and settlement constraints. Milestone 4.
+
+## O-11
+
+**Approved in part — notifications and email.** Initial channels are in-app and email, in Arabic and English. Push and SMS are deferred. Initial email provider is Hostinger SMTP behind a replaceable interface. The proposed sender is `notifications@yourdomain.com`, subject to actual domain configuration. Distinguish essential transactional notifications from optional categories. Admin controls categories and delivery configuration, including optional categories to manage costs. Automate membership-expiry and overdue-installment reminders. Admin controls schedules, frequency, channels and monthly reminder limits. Use Asia/Riyadh and prevent duplicate reminders.
+
+Payment messages distinguish recording, verification/authorization, and rejection or return for correction. Delegated verification cannot send final approval before Admin authorization.
+
+**Owner question.** Which categories are essential, and what initial reminder schedules, channels and monthly limits should Admin configure? This determines mandatory delivery and cost controls.
+
+**Implementation dependencies.** Actual sender/domain and DNS/TLS, SMTP account and secret provisioning, hosting and registry access, designated alert ownership, and representative workload/acceptance targets. Define safe outbox events, timezone and dedup keys, limit scope, templates and retry behavior. Delivery remains a later milestone.
+
+## O-12
+
+**Approved in part — backup and recovery.** Automated daily encrypted PostgreSQL backups with at least one copy outside the VPS, documented restoration, periodic restore tests and monitored success/failure. Retain 30 daily, 12 weekly and 12 monthly copies. Maximum RPO 24 hours. Target RTO 8 hours. Alert Admin and the designated Technical Administrator on failure. Log execution results and failures. Restrict key custody and backup access.
+
+**Owner question.** Who owns backup/key custody and monitoring, which off-VPS provider and restore-test cadence should be used, and will Hostinger backup supplement that policy? These inputs determine restore access and evidence of recoverability.
+
+**Implementation dependencies.** Select storage, provision and restrict credentials, test key recovery and off-VPS restoration, verify retention and alert delivery, and measure RPO/RTO. Approval does not establish that any backup job or restore test exists.
+
+## O-13
+
+**Approved in part — warranty and technical maintenance.** Provide a 30-day post-launch warranty for in-scope bug fixes, with priority for critical production issues. Handle new features and scope changes separately. Agree hosting and ongoing maintenance costs separately. A designated Technical Administrator handles VPS, database, Redis, backups, security updates and diagnostics. The technical role is separate from business permissions and does not confer financial authorization, membership activation or confidential commission access.
+
+The designated Technical Administrator can deploy directly to authorized production without separate Admin approval for each update. Log person, version, timestamp and outcome. Maintain rollback and recovery procedures. During a critical incident when the designee is unavailable, Admin may authorize an alternative technical person temporarily. Make access scoped, time-bound, revocable and audited.
+
+**Owner question.** Who is the designated Technical Administrator, and what mobile launch targets, handover ownership and ongoing support commitments apply? Release needs an accountable operator and a defined handover and support boundary.
+
+**Implementation dependencies.** Define separate infrastructure identities, access paths, credential custody and emergency approval, expiry and revocation workflow. Verify controls against direct database access and release tooling. See [deployment and security](architecture-review.md#deployment-and-security).
+
+## O-14
+
+**Approved in part — implementation and initial production authorization.** Foundation was authorized. Initial production go-live still requires separate authorization. O-13 covers subsequent production updates by the designated Technical Administrator.
+
+**Owner question.** Who signs off initial go-live and how will the approval be recorded? This sets the initial cutover gate. Production Admin bootstrap is tracked under O-02. Milestone 2 implementation remains outside this documentation task.
+
+## O-15
+
+**Approved — Admin-only activation.** Both ordinary and exceptional membership activation require Admin. Payment permissions and persisted legacy Staff grants confer no activation authority under the approved policy.
+
+**Implementation status.** At the Foundation baseline, the ordinary stub accepted the legacy Staff grant. The public catalog implementation denies it on both stubs and rejects new assignment. Stored rows remain for compatibility and history. The [evidence and reconciliation checklist](milestone-2-readiness-review.md#o-15-authorization-conflict) inventories the action mapping, route checks, persisted grant, tests and documentation. Reconcile before enablement. No further business approval is needed for the Admin-only rule.
+
+## O-16
+
+**Approved — concurrent memberships.** Multiple memberships or packages may be active concurrently for one client. Preserve independent validity, entitlement, payment, attendance and adjustment histories. Future bookings explicitly identify the membership covering the session, and entitlement usage remains attached to that membership.
+
+**Implementation dependencies.** No one-active-membership-per-client constraint. Bind funding to the correct purchase/item and bind bookings, Coach submissions and Admin attendance verification to the selected membership. M2 preserves those relationships. Booking and attendance are later work.
+
+## O-17
+
+**Approved — acceptance and agreement evidence.** Admin may formally accept and record a purchase. Staff may do so only with an explicit dedicated permission. Client intent alone does not constitute formal acceptance. Every accepted purchase has client agreement evidence: explicit in-app confirmation, a reference to a signed agreement communicated separately, or a verbal agreement recorded by Admin or authorized Staff with a supporting note. Electronic signatures are unnecessary for the MVP. Preserve client, purchase, frozen terms, acceptance method, timestamp, responsible person and evidence reference or note as applicable. Membership activation remains Admin-only and separate.
+
+**Approved — immutable terms, cancellation and SAR 0 issuance.** Freeze package, services, price/currency, sessions/duration, validity, installments, discounts and custom terms. Later catalog changes leave the purchase intact. Admin may cancel with reason and audit even after activation or partial use. Review membership consequences separately. Cancellation never automatically refunds or changes credit. Preserve financial and usage history. Admin may issue a SAR 0 purchase with a reason or purpose, normal membership and entitlement terms, and no artificial payment or revenue.
+
+**Owner question.** Which price components and discount rules are allowed, and what should remain owed after cancellation absent a separate receivable adjustment? This determines validation of the frozen price and the cancellation accounting workflow.
+
+**Implementation dependencies.** [M2-T02 and M2-T04](milestone-2-technical-contracts.md) cover exact-version evidence, dedicated acceptance authority, atomic acceptance and recording as a proposed design, cancellation review and immutable snapshots. Finance and zero-price activation also depend on M2-T01 and M2-T03.
+
+## Technical closure
+
+| ID | Unresolved contract | Dependency and gate |
 |---|---|---|
-| One launch currency and a short method list | Simple reconciliation, no FX, fewer receipt-identity rules | Cannot serve other currency receipts without a later decision |
-| Multiple independently settled currencies | Existing account-per-currency model can support it | Requires price lists, per-currency precision and separated reporting; no implicit conversion |
-| Validity as elapsed 24-hour periods | Straightforward instant arithmetic | Local expiry can shift with DST and may conflict with advertised calendar days |
-| Validity as studio calendar days | Customer-readable dates and stable local midnight boundary | Requires explicit timezone conversion and boundary tests |
+| M2-T01 | Payment and finance state/effect matrix, including distinct verification and authorization, receipt identity and authorized evidence exception, mixed credit provenance, due-date history, refund reservation and execution reconciliation | O-01/O-03–O-05/O-17, audit B01–B02. Review before finance migrations. |
+| M2-T02 | Catalog privacy invariant and exact-version acceptance under the package lock | O-06/O-17, catalog part of B05. Review before catalog and purchase writes. |
+| M2-T03 | Funding attribution and immutable activation evidence, date/expiry boundaries, suspension transitions, zero-price activation and entitlement projections | O-01/O-03/O-07/O-15–O-17, audit B03. Review before enabling membership commands. No grace workflow. Review explicit extension after expiry and future-dated activation. |
+| M2-T04 | Separate membership and session decisions for refund, funding correction, and purchase cancellation, with same-source and membership checks | O-04/O-05/O-07/O-17. Review before enabling consequences of financial changes. |
 
-**Recommendation for approval.** Confirm Africa/Cairo and EGP rather than inferring either from fixtures or the reviewer's locale. Enable cash and bank transfer only if the studio confirms both; add any other actual method with its identity rules before accepting it. Permit two decimal places for EGP input while retaining the dictionary's storage precision; reject excess precision instead of rounding silently. No FX. Treat installment `due_on` as a studio-local date; overdue begins at the next local midnight. For a duration of N calendar days, the activation's studio-local date is day one and `valid_until` is midnight at the beginning of date + N, exclusive. Activation starts immediately; this can make the first day shorter than 24 hours. Capture that customer-facing rule explicitly. Future service dates use the approved studio timezone, not a phone/browser timezone.
-
-**Impact.** Database: validate currency/methods/precision in policy; store applied start/end instants and policy ID, due dates as `date`. Permissions: `studio.configure` stays Admin-only. API: decimal strings plus currency; validate timestamps and date-only fields separately; reject disabled methods/currencies. Reporting: report by receipt time and selected studio business date, separately per currency; no summing currencies. Future workflows: booking service-time eligibility uses the stored validity boundary; later studio timezone changes must not rewrite earlier deadlines. **Owner approval: yes.**
-
-## O-03 — Funding, verification, and receipt identity
-
-**Current position.** [Financial settlement](business-rules.md#financial-settlement) confirms separate record, verify, allocate and activate commands. [Membership rules](business-rules.md#membership-and-entitlement) exclude unrelated/unapplied receipts from activation, require purchase-matched verified funding, and preserve activation evidence. O-03 leaves threshold, purchase/item attribution, receipt identity, self-verification and exception evidence open. Audit B01 identifies duplicate real-world receipts despite HTTP idempotency; B03 identifies reuse of partial purchase funding across several items. Activation roles are separately reconciled in O-15.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| Full net verified funding of one purchase | Clear and hard to misattribute | Installment clients need an approved exception before full funding |
-| First installment, fixed deposit, or percentage | Supports service before full settlement | Must define amount, rounding, arrears behavior and purchase/item attribution |
-| Per-item funding within multi-item purchases | Flexible bundles and staged activation | Requires item allocation, thresholds and refund attribution absent from the current model |
-| Recorder may verify own receipt | Works with one operator | Removes a useful second-person check |
-| Different recorder and verifier | Separates evidence entry and confirmation | Requires two authorized operators; Admin can record and Staff can verify only with the named grant |
-
-**Recommendation for approval.** One membership-bearing item per purchase at launch, with full net cash-backed allocations to that purchase before ordinary activation. Installment schedules still track collection; partially funded activation uses only an approved, reasoned Admin exception. Do not quietly substitute “first installment paid” as the threshold. Require a different verifier from recorder; verify the actual method/reference/amount evidence, not just a checkbox. Preserve the separate exception path; default exceptions to disabled until the studio states eligible reasons and evidence. An exception does not mark debt paid or create a receipt.
-
-For cash, issue a unique controlled studio receipt number. For bank transfer, require a normalized bank/account namespace plus the external transaction identity. Deduplicate studio-wide, across clients, currencies and new HTTP keys; amount and client are not identity components. Preserve a root receipt identity across replacements, with only one effective verified chain member. An uncertain identity cannot be verified. These are proposed B01 safeguards, not capabilities of the existing optional `external_ref` field.
-
-**Impact.** Database: unique receipt-root identity and set-once origin/verification references; one-item launch validation without removing the future one-to-many item relationship; activation stores policy, evaluated funding, currency and an evidence anchor. Permissions: `payment.record` and `payment.verify` remain independent, with a policy check for different actors; `payment.allocate` confers neither. API: verification rejects duplicate/uncertain identity and superseded receipts; activation computes funding under account lock and rejects override fields. Reporting: show collected, applied, outstanding and exception-activated memberships separately; full funding is not inferred from recorded payments. Future workflows: late installments do not auto-suspend until separately approved; future item-specific funding needs a reviewed extension. **Owner approval: yes, including threshold, self-verification and exception categories.**
-
-## O-04 — Installments, allocation, overpayments, and credit
-
-**Current position.** [Domain relationship corrections](domain-model.md#relationship-corrections) already allow one lot to fund many installments and many lots to fund one installment. Typed `FINANCE_EVENT` rows are the allocation relation; no duplicate allocation table is needed. O-04 leaves allocation priority, targeting, conversion, reuse, issuance, expiry and cash-out pending. Verified funds initially remain unapplied. Reversal restores the original source bucket.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| Operator explicitly selects targets | Predictable, reviewable, supports several purchases | More manual input; mistakes need linked reversals |
-| Automatic oldest due first | Fast and consistent for routine collections | May fund an unintended purchase; needs tie-breaks and explicit client agreement |
-| Reject any receipt above a purchase balance | Avoids credit handling | Cannot faithfully record cash already received; payment is account-scoped rather than purchase-scoped |
-| Automatically convert excess into reusable credit | Convenient customer balance | Implies a policy choice at verification and can hide unapplied cash |
-| Preserve unapplied funds, with explicit conversion/reuse | Records reality and keeps operator intent visible | Requires separate unapplied/credit balances in the UI and reports |
-
-**Recommendation for approval.** Record the actual receipt amount, including excess. Suggest targets by due date, purchase creation time and installment sequence, but require the operator to submit explicit allocation lines. Allow one verified payment/lot to cover multiple installments and purchases belonging to the same client/currency; allow each installment to receive multiple receipts. Apply a batch atomically. Never allocate beyond a target balance or spend a reserved bucket. Excess stays unapplied. Permit explicit conversion of cash-backed unapplied funds to reusable credit, and explicit spending through `payment.allocate`; no automatic conversion, promotional/noncash issuance, credit expiry or cash-out at launch. A cash-backed credit refund still follows the original receipt refund path under O-05, not an unrecorded credit withdrawal.
-
-Where a purchase has a schedule, allocations must target an installment; without a schedule, they may target the purchase. Installing a schedule after purchase-level allocations requires an explicit atomic reversal/reallocation, not counting the same funding twice. Initial installments are positive and sum to the agreed purchase total. Installments have due dates without automatic penalties or membership suspension. Reject edits or retirement of funded installments; replace only unpaid future portions with linked replacements preserving the current scheduled obligation. A purchase adjustment on a scheduled purchase targets an installment through an immutable finance event, changing its effective obligation without rewriting its original scheduled amount; each adjusted portion must still cover its net allocations. The aggregate schedule and purchase obligation must agree. Reallocation needs `payment.allocate`, in addition to `installment.manage` when changing the schedule. Automatic rescheduling is excluded.
-
-**Impact.** Database: lot/bucket/source traces, optional installment target and scoped FKs; no stored mutable balance. Permissions: `finance.read`, `installment.manage`, `payment.allocate` stay independent; explicit credit conversion uses `payment.allocate`, while exceptional issuance/forfeiture would require Admin-only `credit.adjust` and stays disabled. API: batch lines share an account/currency; allocation planning is advisory; each line has a durable posting key; schedule replacement rejects funded lines. Reporting: derive receipt cash once, purchase settlement once, installment arrears, unapplied and available-credit buckets separately. Future workflows: activation counts net cash-backed credit spending to the purchase; later reminders use due dates, never grant themselves financial authority. **Owner approval: yes.**
-
-## O-05 — Refunds, reversals, and administrative corrections
-
-**Current position.** [Settlement rules](business-rules.md#financial-settlement) preserve receipts and refunds, require compensating verified corrections, reserve before manual execution, retain uncertain payouts, and separate membership review from cash return. The [matrix](permission-matrix.md) fixes refund decision/execution/post/reconciliation, payment reversal, credit adjustment, membership management and entitlement correction to Admin. These authorities are not reopened. O-05 still needs receivable effects, execution evidence and permitted correction procedures. Audit B02 needs a closed effect matrix.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| Cash refund automatically cancels purchase/membership and restores sessions | Few operator steps | Conflates cash, debt and service; can restore consumed units or cancel partially retained service incorrectly |
-| Explicit finance adjustment and separate membership review | Traceable intent; fits the existing contract | Requires Admin to resolve the service consequence deliberately |
-| Edit/delete a verified receipt | Superficially simple | Breaks history and reconciliation; incompatible with the confirmed preservation rule, so unavailable |
-| Compensate original postings and append corrected evidence | Maintains accountability and balances | Must resolve dependent allocations, reservations and prior refunds first |
-
-**Recommendation for approval.** Offer full and partial **cash** refunds of verified, receipt-backed funds. A full refund means the full remaining refundable amount on that original receipt; a purchase paid through several receipts requires separate receipt-scoped refund cases. Reversal of a purchase allocation reopens its receivable; a refund does not forgive that debt. If the studio is cancelling or reducing the sale, Admin separately posts a reasoned receivable adjustment and resolves the membership review. No tax, accounting journal or automatic clawback policy is introduced.
-
-Approval freezes amount, currency, lot and bucket, reserves receipt capacity and any necessary freed allocations atomically. One Admin claims execution before handing over cash/sending a transfer. Require method, executed-at, external payout/controlled voucher reference and a reason; a safe reference is sufficient for this milestone, with no new file-storage infrastructure. Normal posting requires the approved amount and evidence. On ambiguity keep the reservation and prohibit another payout claim. Reconciliation can post a proven smaller payout and release a proven unpaid remainder; store approved, actual and released amounts distinctly. If actual payout exceeds the reservation, retain observed evidence and reconciliation state, do not pay again or silently cap the record; resolve extra capacity within receipt limits or leave a visible discrepancy for Admin resolution. The normal path never breaks the original receipt cap.
-
-An unverified correction appends a replacement and permanently supersedes the old facts. A verified error uses Admin-only linked reversal events; no in-place amount/method/reference edits. Resolve dependent allocations and keep funds reserved for uncertain refunds. Default to whole remaining verification reversal only after dependencies are clear; then append a replacement receipt under the same identity chain. A real cash return is a refund, not a verification reversal. Erroneous refund evidence is corrected by additional audited reconciliation information, never deletion of a true cash movement. Historical activation evidence remains unchanged; a funding reversal opens an Admin review, not automatic deactivation.
-
-**Impact.** Database: frozen reservation bucket and immutable transition/evidence history, one execution token, at most one terminal cash event, linked reversals with bounded remainder, review per affected membership, reasoned purchase adjustment events. Permissions: preserve existing Admin boundaries; requests remain Client-own/Admin-on-behalf, Staff denied. API: decide/claim/post/reconcile are separate commands; no generic “set paid” or refund DELETE/PATCH. Reporting: refund cash, reopened debt, forgiven debt, reserved funds and unresolved payout discrepancies are distinct measures; no editing prior-period source records. Future workflows: booking consequences wait for scheduling policy; consumed sessions are never restored merely because money was refunded. **Owner approval: yes for receivable policy, evidence and correction procedure; existing role restrictions stand.**
-
-## O-06 — Catalog, private offers, and pricing
-
-**Current position.** Published versions and agreed purchase-item snapshots are immutable in the [domain model](domain-model.md); changed terms need explicit acceptance. Public packages have no owner; private packages have exactly one client. O-06 leaves expiry, superseded acceptance and Staff private pricing open. Audit B05 observes that changing parent visibility/owner could expose historical private terms. `catalog.manage` and `catalog.private.manage` are independently grantable; `catalog.read` lets Staff read only published public offers. “Public” does not currently mean anonymous or Coach access.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| Accept old versions indefinitely | Clients retain quoted terms | Old prices remain actionable without a clear commercial cutoff |
-| Reject superseded/expired offers at acceptance | Small, predictable launch rule | Clients must explicitly accept the replacement version |
-| Offer acceptance window/grandfathering | Supports time-limited quotes | Requires persisted deadline and more acceptance policy |
-| Admin-only private/custom pricing | Small authority surface | Admin performs all special offers |
-| Explicit Staff private-pricing grant | Fits the canonical matrix and delegates work | Requires approved delegation and clarified private management-read scope |
-| Arbitrary price override while recording a purchase | Fast discounts | Can bypass private pricing authority and obscure accepted terms |
-| Final agreed price in a client-specific published version | One pricing source and clear acceptance | More catalog versions for bespoke offers |
-
-**Recommendation for approval.** Keep public catalog management grantable as documented, with grants initially disabled until assigned; no separate publish approval role. The same authorized public manager may create/edit drafts, publish a version and archive it. At launch assign no `catalog.private.manage` Staff grants: Admin creates, prices and publishes client-only offers. This is a grant configuration recommendation, not removal of the documented grant. Freeze visibility/client once any version is published; reassignment creates a new package. Store an explicit acceptance expiry on private versions. Require the Admin to choose it; do not invent a seven/thirty-day default. Reject superseded, expired or archived offers at request acceptance as well as new request creation. Requote a new version and obtain new client acceptance. Existing purchases remain untouched.
-
-Represent discounts as the final agreed version price, with optional original/list price snapshot and mandatory discount reason when applicable; do not add a separate discount engine. Reject arbitrary purchase price overrides; create a private version instead. Snapshot agreed price and discount evidence. Staff private management reads are a contract ambiguity: do not use `catalog.read` to expose private offers. Document a dedicated management projection under `catalog.private.manage` before delegating private management; Admin-only at launch avoids granting broad private reads by inference.
-
-**Impact.** Database: acceptance expiry, immutable owner/visibility and eligibility; optional list-price/discount-reason snapshot fields only where discounts are offered. Permissions: public/private managers independent, client private owner check on every list/detail/acceptance; no implicit private access via `purchase.record`. API: strict draft/publication transitions and exact version IDs; conflict requires requote, not substitution. Reporting: agreed price and discount are from the purchase, never today's catalog. Future workflows: eligible session types remain version-linked; private quote expiry stops acceptance, not a purchased membership. **Owner approval: yes for expiry choice, old-version acceptance and pricing delegation; immutability/privacy safeguards preserve existing contracts.**
-
-## O-07 — Membership validity, suspension, grace, and unused sessions
-
-**Current position.** [Membership rules](business-rules.md#membership-and-entitlement) issue pending memberships without usable entitlement, authorize Admin suspension/cancellation/extensions/grace, derive expiry/exhaustion and preserve unit history. O-07 leaves time freezing, reinstatement/cancellation effects, grace precedence and unused sessions open. Audit B03 requires explicit grace start/revocation, not just `grace_until`.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| Suspension continues the validity clock | Simple and matches fixed purchased dates | Client may lose service time during a pause |
-| Suspension freezes the clock | Protects paused time | Needs overlap-safe pause accounting and clear retrospective rules |
-| Automatic grace or unused-unit rollover | Customer-friendly | Creates obligations and eligibility ambiguity without a defined policy |
-| Explicit dated Admin extension/grace; no rollover | Visible exception and stable formal expiry | Requires manual review for exceptions |
-| Activation-now versus scheduled first-service start | Immediate start is easy to evidence; delayed start avoids lost days | Delayed start requires scheduling rules and future eligibility states |
-
-**Recommendation for approval.** Activation starts now using O-01 calendar-day validity. No future/backdated start in ordinary activation. Suspension immediately blocks eligibility while the clock continues; reinstatement preserves formal expiry and cannot make an already expired membership eligible. Cancellation is terminal, preserving money and ledger history. No automatic grace, renewal, rollover, unit forfeiture posting or transfer between memberships. Expired unused units stay visible as historical remaining units but are unusable. Admin may extend formal expiry with reason, including an expired but uncancelled membership; this makes existing remaining units usable again without another grant. Do not silently revive a suspended/cancelled membership. Time packages have no session-unit balance.
-
-Allow explicit Admin grace only as a bounded `[starts_at, ends_at)` interval for an otherwise ACTIVE membership; it extends eligibility without changing formal expiry or adding units. Cancellation/suspension override grace; exhaustion blocks session use even during grace. Permit at most one effective grace interval per membership at a time; reject overlaps and revoke through a linked event. No automatic maximum duration is assumed: record the explicit approved interval and reason. Extensions must strictly increase the current expiry; shortening is a separate reviewed correction, not a negative extension. Discretionary unit reductions must not make remaining units negative at launch; consumed service history is never rewritten. Version the policy applied to each action. Future confirmed-booking effects are out of scope; once bookings exist, lifecycle commands must use their approved dependency protocol rather than silently orphan commitments.
-
-**Impact.** Database: event-based lifecycle, explicit old/new expiry, grace interval and revocation reference, one initial session grant; preserve purchased versus extended validity. Permissions: `membership.manage` and `entitlement.adjust` stay Admin-only and independent of verification/allocation. API: expose lifecycle, effective eligibility, formal expiry, grace and historical units separately; reject invalid/repeated transitions; no balance replacement endpoint. Reporting: distinguish suspended, expired, exhausted and cancelled, with reasons and adjustment deltas. Future workflows: service-time eligibility and commitment checks reuse this projection; attendance later debits only through accepted verification. **Owner approval: yes.**
-
-## O-15 — Ordinary activation authority conflict
-
-**Current position.** This review request expressly calls for “Admin-only membership activation.” The current [permission matrix](permission-matrix.md), [business rules](business-rules.md), `permissions.ts`, the persisted Staff grant enum, and unit/integration test expectations permit specifically granted Staff to invoke ordinary verified-funded activation. Only the exception is unambiguously Admin-only today. Both activation routes remain disabled workflow stubs.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| Admin-only ordinary and exception activation | Follows the explicit review request and centralizes authority | Requires a deliberate correction to the current matrix, route contract and test expectations |
-| Preserve explicitly granted Staff ordinary activation | Matches Foundation's tested permission contract | Conflicts with the review request's stated activation requirement |
-
-**Review direction.** Plan Admin-only ordinary activation, as requested. Do not alter Foundation during this review. Before implementation, record the owner's resolution and reconcile the canonical matrix, business/API wording and affected tests. Keep the exception as its own reasoned Admin command even if both paths have the same role. Do not extend `payment.verify` into activation authority. A dormant legacy Staff grant must not confer activation after the Admin-only policy is adopted; deny it in the action mapping and define its administrative retirement deliberately rather than casually altering the Foundation migration.
-
-**Impact.** No new commercial entity; policy/permission mapping and existing grant handling need consistency. API activation rows in the plan are Admin-only pending reconciliation. Reports preserve activation actor and funding basis. Future workflows cannot auto-activate upon payment. **Owner resolution required before activation implementation; the preferred direction comes from this explicit request, not a newly inferred business rule.**
-
-## O-16 — Concurrent memberships
-
-**Current position.** The ERD permits many memberships per client and one per purchase item, but does not say whether simultaneous ACTIVE memberships are commercially allowed. A schema cardinality is not launch approval.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| One active membership per client | Simple future selection | Blocks early renewals and parallel session/time products; requires a cross-row rule and replacement policy |
-| Multiple independently tracked active memberships | Fits the model and avoids automatic replacement | Later bookings must select and validate one membership |
-
-**Recommendation for approval.** Permit several independently active memberships, including overlapping dates, with no pooling, priority spending or automatic cancellation of the previous one. Future booking explicitly names one membership. **Impact:** database retains client/state/validity index without active-client uniqueness; permissions remain client-own/Admin; API list returns distinct eligibility and units and activation does not overwrite another membership; reports aggregate counts carefully without merging entitlements; future booking/attendance attaches to exactly one membership. **Owner approval: yes.**
-
-## O-17 — Purchase contract and lifecycle
-
-**Current position.** Requests refer to exact versions; recording creates one or more items and pending memberships; positive receivables post atomically. The dictionary says zero-price issuance needs approved policy. Request states, atomic approval versus recording, cancellation and charge/discount composition are not fully specified. Existing permissions distinguish `purchase.review` from `purchase.record`.
-
-| Option | Advantages | Disadvantages |
-|---|---|---|
-| Approval and recording are separate pending steps | Each independent grant can perform its stage | Approved requests can drift before recording; needs an extra state and expiry rule |
-| Acceptance atomically records purchase | No approved-but-unrecorded contract gap | Accepting caller needs both review and record actions |
-| Editable purchases or silent cancellation | Superficially convenient | Invalidates snapshots or hides debt and received cash; incompatible with preservation requirements |
-| Immutable recorded terms with explicit cancellation/adjustments | Traceable contract, money and entitlement | More explicit Admin commands |
-
-**Recommendation for approval.** Client submits/withdraws an own pending request. `purchase.review` can reject; acceptance also requires `purchase.record` and atomically creates exactly one purchase, its charge, item, schedule if supplied and PENDING_ACTIVATION membership. Direct assisted recording uses `purchase.record`, exact eligible terms, and an acceptance-evidence reference/reason; it cannot pretend the Admin is a Client calling `purchase.request`. Persist explicit client agreement for a private quote. Avoid an APPROVED state awaiting another operator. Preserve one purchase per request.
-
-Request states: REQUESTED → ACCEPTED, REJECTED or WITHDRAWN. Expired/superseded offers cannot be accepted; rejection/requote remains explicit. Purchase lifecycle: RECORDED → CANCELLED through Admin-only reasoned financial correction under `payment.reverse`; cancellation requires `membership.manage`/`entitlement.adjust` too when their effects are requested. Recorded amounts/items are immutable. Unfunded cancellation can offset the charge and cancel the pending membership atomically. Funded cancellation requires explicit unallocation plus refund/retained-credit disposition; do not label cash refunded until posted. Active-service cancellation requires an explicit membership review. Settlement status (unpaid/part-paid/paid, with unapplied funds separate) is derived, not a writable lifecycle flag. Reject zero-price purchases at launch; gifts require later approval. Agree the final total in the offer; no independent taxes, fees, stacking discounts or tax-invoice engine in M2. The studio must confirm whether advertised prices already include any applicable charges; implementation does not invent a tax treatment.
-
-**Impact.** Database: request/purchase state and transition audit, unique request link, final-price snapshot and acceptance evidence; no redundant mutable paid total. Permissions: acceptance checks both independent actions; Admin-only financial corrections reuse existing authority rather than granting Staff a new cancellation power. API: explicit accept/reject/withdraw/record/cancel commands, no mutable recorded-item endpoint. Reporting: cancelled contract, charge adjustments, retained funds and refunds remain separate. Future workflows: pending purchases grant no service; cancellation cannot erase consumed history. **Owner approval: yes.**
-
-## Technical closure and approval record
-
-M2-T01–T04 do not add services or a general ledger. Their concrete proposal is in the [implementation plan](milestone-2-implementation-plan.md#finance-event-contract-proposed). Before migrations, review the complete event/reference matrix, composite keys, posting uniqueness, permissions and source-linked histories. Before affected workflows, close B01–B03 and the catalog portion of B05 with tests; this review does not mark them closed.
-
-The approval record should list each O-ID, selected option/deviation, approving owner, date, policy version/effective date, and any disabled optional path. Approval of this report alone must not be interpreted as approval of every recommendation or authorization to implement. O-02 continues to gate real onboarding; O-08–O-13 remain outside this milestone except for their explicitly identified future dependencies.
+The [technical contract review](milestone-2-technical-contracts.md) classifies closure and sequencing. The [implementation plan](milestone-2-implementation-plan.md) maps those contracts to slices. Enabled paths require their applicable owner choices, a versioned effective policy and tested implementation.

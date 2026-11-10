@@ -1,6 +1,6 @@
 # Strength Studio
 
-Milestone 1 Foundation for the single-studio management platform. The workspace contains a NestJS API and a minimal Next.js sign-in surface. The Flutter directory records the mobile contract for its later interface milestone.
+Foundation and the public package catalog for the single-studio management platform. The workspace contains a NestJS API and a minimal Next.js sign-in surface. The Flutter directory records the mobile contract for its later interface milestone.
 
 ## Local setup
 
@@ -55,8 +55,9 @@ The unit suite needs no database. The integration suite uses the documented loop
 
 - Argon2id sign-in for active, verified accounts, short-lived bearer tokens, refresh rotation and replay revocation, logout, and single-use socket tickets. Current roles and staff grants are checked server-side. Existing sockets disconnect on invalidation or failed revalidation.
 - Scoped account reads, non-Admin account disablement, independent staff grants, versioned studio timezone and currency settings, append-only audit, and transactional retry outcomes for administrative writes.
+- Public package and session-type API with versioned drafts, Admin-only zero-price publication, and scoped catalog history. See [public catalog routes](docs/api-contract.md#implemented-public-catalog).
 - Process health and PostgreSQL readiness, validated configuration, request IDs, redacted request logs, and the [OpenAPI snapshot](packages/api-contract/openapi.json).
 
-Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. The separate Admin-only membership exception and commission routes enforce their permission boundary and return `WORKFLOW_NOT_ENABLED` without loading or mutating business records. Other commercial, scheduling, and attendance workflows are deferred. Redis/BullMQ delivery, SMTP, and production deployment are later milestones. There are no finance, booking, commission, or outbox tables in this migration.
+Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. Both membership activation stubs and commission reads are Admin-only and return `WORKFLOW_NOT_ENABLED` for authorized calls. Private offers, purchases, payments, refunds, scheduling and attendance remain deferred. Redis/BullMQ delivery, SMTP, and production deployment are later milestones. There are no finance, booking, commission, or outbox tables in this migration.
 
 See [the implementation roadmap](docs/implementation-roadmap.md), [API contract](docs/api-contract.md), and [open studio decisions](docs/open-decisions.md).

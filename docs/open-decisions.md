@@ -1,27 +1,27 @@
-# Open studio decisions
+# Studio decision index
 
-A decision marked pending is not a launch rule. Optional workflows remain disabled until approved. Local tests can use clearly identified fixtures.
+Updated 10 November 2026 against Foundation and both owner decision briefs. Status applies to business policy. Implementation, rollout and effective policy revisions are tracked separately. An unresolved part of an approved decision still gates the affected behavior.
 
-| ID | Decision requiring approval | Needed by |
+| ID | Status | Scope and remaining dependencies |
 |---|---|---|
-| O-01 | Studio IANA timezone, launch currencies and methods, service-date and cutoff interpretation | Configuration and commercial acceptance |
-| O-02 | Registration enablement after verification, Admin-created invitation workflow, Admin MFA and recovery, initial staff grant set | Identity acceptance |
-| O-03 | Verified funding threshold and purchase versus item attribution, receipt identity by payment method, whether recorder may verify their own receipt, eligible Admin activation exceptions and evidence | Commercial acceptance |
-| O-04 | Installment allocation order and targeting, overpayment-to-credit conversion, reuse, expiry, issuance and cash-out | Finance acceptance |
-| O-05 | Refund effects on receivables and membership, cash execution evidence, correction authority | Refund and review acceptance |
-| O-06 | Private offer expiry, superseded offer acceptance, staff authority for private pricing | Catalog acceptance |
-| O-07 | Suspension freezes or continues validity, reinstatement and cancellation effects, grace eligibility, timing and precedence, and unused-session handling | Membership acceptance |
-| O-08 | Hold duration, client limit and counting window, coach buffers, replacement holds, handling of affected bookings, waitlist launch scope and ordering | Scheduling acceptance |
-| O-09 | Late attendance deadline, chargeable no-show/late-cancellation outcomes, insufficient entitlement handling, correction recipients | Attendance acceptance |
-| O-10 | Manual commission recipient eligibility and distribution rules. Automatic calculation stays out of scope. | Commission acceptance |
-| O-11 | SMTP settings and reminder cadence, actual domain/DNS, hosting and registry access, alert ownership, launch workload and acceptance targets | Release validation |
-| O-12 | Backup provider, retention, key custody, RPO/RTO, restore drill cadence, optional Hostinger backup | Release validation |
-| O-13 | Mobile launch targets and original delivery, ownership, support, and warranty commitments | Handover planning |
-| O-14 | Foundation authorization was granted. Production deployment still requires separate authorization. | Before production |
-| O-15 | Resolve activation-authority discrepancy: the 7 November 2026 review request specifies Admin-only ordinary activation, while the current matrix and Foundation grant/test contract allow explicitly granted Staff on the verified-funded path. The review plan follows the requested Admin-only direction; reconcile canonical sources before implementation. No Foundation behavior changed in this review. | Membership implementation |
-| O-16 | Whether a client may have concurrent active memberships; independent balances/validity versus replacement or pooling. Recommendation only: permit independent memberships and require explicit membership selection in the later booking workflow. | Membership issuance and activation |
-| O-17 | Purchase-request acceptance versus recording, required agreement evidence, purchase cancellation/adjustment lifecycle, final-price composition and zero-price issuance. Recommendation only: atomic acceptance/recording with both permissions, immutable recorded terms, explicit Admin corrections, no zero-price purchases initially. | Purchase implementation |
+| [O-01](milestone-2-decision-register.md#o-01) | Approved | Saudi Arabia, SAR, Asia/Riyadh, configurable manual methods and evidence exceptions, local-calendar validity. Date encoding, method identity and precision contracts are pending. Scheduling cutoffs remain O-08/O-09. |
+| [O-02](milestone-2-decision-register.md#o-02) | Approved in part | Admin-created and self-registered Client accounts, verified email, registration switch, verified-email Admin recovery and explicit Staff grants. Mandatory Admin MFA deferred. Invitation, post-verification enablement and production Admin lifecycle still need decisions. |
+| [O-03](milestone-2-decision-register.md#o-03) | Approved in part | Purchase-specific allocated payment and credit, audited reallocation, Admin self-verification/authorization as distinct events, and Admin partial-payment activation. Staff self-verification, minimums if any, multi-item attribution and exceptional activation criteria remain open. |
+| [O-04](milestone-2-decision-register.md#o-04) | Approved in part | Admin manual allocation, installment servicing, non-expiring credit, credit refunds through the formal workflow, and linked adjustments/corrections. Conversion triggers and refunds of credit without an original payment need clarification. |
+| [O-05](milestone-2-decision-register.md#o-05) | Approved | Full/partial refunds, actual payout reference or reasoned Admin exception, separate receivable adjustment and independent service decisions. Review payout reconciliation and O-04 provenance before enablement. |
+| [O-06](milestone-2-decision-register.md#o-06) | Approved core policy | Dedicated private management permission, own-client visibility, optional Riyadh expiry, version history, supersession and reasoned Admin withdrawal. Staff withdrawal scope and private-offer reuse need clarification. |
+| [O-07](milestone-2-decision-register.md#o-07) | Approved | Admin activation date or future Riyadh start, explicit extension, no automatic grace, scheduled/open-ended suspension, unused-session expiry and independent termination. Transition contracts and later O-08 booking effects remain. |
+| [O-08](milestone-2-decision-register.md#o-08) | Unresolved | Holds, client limits, coach buffers, replacement and affected bookings. Waitlist deferred pending launch scope and ordering. Milestone 3. |
+| [O-09](milestone-2-decision-register.md#o-09) | Unresolved | Late attendance, chargeability, insufficient units and correction recipients. Admin verification and deduction boundary stays approved. Milestone 3. |
+| [O-10](milestone-2-decision-register.md#o-10) | Unresolved | Manual commission recipients and distribution rules. Access remains strictly Admin-only. Automatic calculation deferred. |
+| [O-11](milestone-2-decision-register.md#o-11) | Approved in part | In-app/email, Hostinger SMTP, bilingual messages and Admin reminder controls. Push/SMS deferred. Category defaults, sender/domain, infrastructure access and measured launch targets remain open. |
+| [O-12](milestone-2-decision-register.md#o-12) | Approved in part | Daily encrypted PostgreSQL backups, off-VPS copy, 30 daily/12 weekly/12 monthly retention, 24-hour maximum RPO and 8-hour RTO target. Provider, custody, alert assignment and restore-drill cadence remain open. |
+| [O-13](milestone-2-decision-register.md#o-13) | Approved in part | 30-day warranty, separate maintenance and designated technical access including audited deployments and temporary emergency access. Designation, mobile launch, handover and commercial commitments remain open. |
+| [O-14](milestone-2-decision-register.md#o-14) | Approved in part | Foundation authorized. Initial production go-live remains separately unauthorized. O-13 authorizes routine deployments by the designated Technical Administrator after production is authorized. |
+| [O-15](milestone-2-decision-register.md#o-15) | Approved | Both disabled activation stubs enforce Admin-only access. New legacy Staff grants are rejected and stored grants confer no authority. Retirement of stored grants and transactional authorization still gate activation enablement. |
+| [O-16](milestone-2-decision-register.md#o-16) | Approved | Concurrent memberships remain independent. Future booking explicitly selects one and attendance affects only that membership. Booking mechanics remain in Milestone 3. |
+| [O-17](milestone-2-decision-register.md#o-17) | Approved in part | Dedicated formal acceptance and recording, required agreement evidence, immutable terms, Admin cancellation and SAR 0 issuance. Price composition and cancellation receivables remain open. |
 
-See [business rules](business-rules.md) and [roadmap](implementation-roadmap.md).
+The [decision register](milestone-2-decision-register.md) records approved details and owner questions. The [technical contract review](milestone-2-technical-contracts.md) classifies blockers, and the [readiness review](milestone-2-readiness-review.md) records the current evidence and sequence.
 
-Review note — 7 November 2026: [Milestone 2 readiness review](milestone-2-readiness-review.md), [decision register](milestone-2-decision-register.md), and [implementation plan](milestone-2-implementation-plan.md) expand O-01 and O-03–O-07 and document O-15–O-17. All recommendations remain unapproved. O-01–O-14 are retained unchanged; receipt identity, allocation/credit details, refund corrections and membership timing remain refinements of their existing decisions rather than duplicate entries.
+The 7 November 2026 review introduced O-15–O-17 and recorded the earlier proposals. Its record remains in [baseline commit `055a67d`](https://github.com/Strength-studio/strength-studio-backend/commit/055a67da1ffc172f7c31c72efc15d282122a3b98).

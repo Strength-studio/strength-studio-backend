@@ -9,7 +9,7 @@ async function generate() {
     host: '127.0.0.1', port: 3000, socketRecheckMs: 15_000 });
   try {
     const document = SwaggerModule.createDocument(app, new DocumentBuilder().setTitle('Strength Studio API')
-      .setVersion('1').setDescription('Milestone 1 Foundation').addBearerAuth().build());
+      .setVersion('1').setDescription('Strength Studio Foundation and public catalog').addBearerAuth().build());
     await writeFile(resolve(__dirname, '../../../packages/api-contract/openapi.json'), JSON.stringify(document, null, 2) + '\n');
   } finally {
     await app.close();

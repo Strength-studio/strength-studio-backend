@@ -162,7 +162,7 @@ export class AccountsController {
 @Controller()
 export class DeferredController {
   @Post('memberships/:id/activate') @RequireAction('membership.activate')
-  @ApiConflictResponse({ description: 'Membership activation is outside Foundation' })
+  @ApiConflictResponse({ description: 'Admin-only activation boundary, no membership mutation' })
   activate(@Param('id', ParseUUIDPipe) _id: string) {
     throw failure(409, 'WORKFLOW_NOT_ENABLED');
   }

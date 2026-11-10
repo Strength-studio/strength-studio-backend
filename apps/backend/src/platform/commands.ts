@@ -11,7 +11,7 @@ export class Commands {
   constructor(private readonly db: Database, private readonly sessions: Sessions) {}
 
   run(input: {
-    access: AccessContext; action: Action; key?: string; args: readonly unknown[]; targetUser?: string;
+    access: AccessContext; action: Action; operation?: string; key?: string; args: readonly unknown[]; targetUser?: string;
     revokeTargetSessions?: boolean;
     scope?: (tx: Transaction) => Promise<void>; write: (tx: Transaction) => Promise<Outcome>;
   }): Promise<Outcome & { executed: boolean }> {
@@ -22,7 +22,7 @@ export class Commands {
       await lockIdentity(tx, access.userId, access.sessionId, input);
       await this.sessions.authorize(tx, access, [action]);
       const now = await databaseTime(tx);
-      const identity = { actorId: access.userId, operation: action, key };
+      const identity = { actorId: access.userId, operation: input.operation ?? action, key };
       const claimed = await tx.idempotencyKey.createMany({
         data: { ...identity, requestDigest, expiresAt: new Date(now.valueOf() + 24 * 60 * 60 * 1000) },
         skipDuplicates: true,

@@ -16,20 +16,40 @@ test('passwords are salted Argon2id digests and a wrong password does not verify
   assert.equal(await checkPassword(first, 'wrong passphrase'), false);
 });
 
-test('staff grants are independent and cannot express commission access or the activation exception', () => {
+test('staff grants are independent and cannot authorize activation or commission access', () => {
   assert.equal(hasAction(Role.STAFF, [], 'client.manage'), false);
   assert.equal(hasAction(Role.STAFF, [StaffPermission.CLIENT_MANAGE], 'client.manage'), true);
   assert.equal(hasAction(Role.STAFF, [StaffPermission.CLIENT_MANAGE], 'membership.activate'), false);
-  assert.equal(hasAction(Role.STAFF, [StaffPermission.MEMBERSHIP_ACTIVATE], 'membership.activate'), true);
+  assert.equal(hasAction(Role.STAFF, [StaffPermission.MEMBERSHIP_ACTIVATE], 'membership.activate'), false);
   for (const role of [Role.STAFF, Role.CLIENT, Role.COACH]) {
     assert.equal(hasAction(role, Object.values(StaffPermission), 'commission.read'), false);
+    assert.equal(hasAction(role, Object.values(StaffPermission), 'membership.activate'), false);
     assert.equal(hasAction(role, Object.values(StaffPermission), 'membership.activate_exception'), false);
   }
   assert.equal(hasAction(Role.ADMIN, [], 'membership.activate_exception'), true);
+  assert.equal(hasAction(Role.ADMIN, [], 'membership.activate'), true);
   assert.equal(hasAction(Role.ADMIN, [], 'commission.read'), true);
   assert.equal(hasAction(Role.ADMIN, [], 'unlisted.action'), false);
   assert.equal(staffPermissions.has('commission.read'), false);
+  assert.equal(staffPermissions.has('membership.activate'), false);
   assert.equal(staffPermissions.has('membership.activate_exception'), false);
+});
+
+test('public catalog and scoped audit actions require independent staff grants', () => {
+  for (const [action, grant] of [
+    ['catalog.read', StaffPermission.CATALOG_READ],
+    ['catalog.manage', StaffPermission.CATALOG_MANAGE],
+    ['audit.read', StaffPermission.AUDIT_READ],
+  ]) {
+    assert.equal(hasAction(Role.STAFF, [grant], action), true);
+    assert.equal(hasAction(Role.STAFF, [StaffPermission.CATALOG_PRIVATE_MANAGE], action), false);
+    assert.equal(hasAction(Role.STAFF, [], action), false);
+    assert.equal(hasAction(Role.ADMIN, [], action), true);
+    assert.equal(hasAction(Role.COACH, [], action), false);
+    assert.equal(hasAction(Role.CLIENT, [], action), action === 'catalog.read');
+  }
+  assert.equal(hasAction(Role.STAFF, [StaffPermission.CATALOG_MANAGE], 'catalog.read'), false);
+  assert.equal(hasAction(Role.STAFF, [StaffPermission.CATALOG_MANAGE], 'audit.read'), false);
 });
 
 test('configuration requires a real signing key and an exact dashboard origin', () => {

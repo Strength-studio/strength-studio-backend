@@ -73,6 +73,12 @@ enum AuditAction {
   REFRESH_REPLAY
   SESSION_REVOKED
   STUDIO_POLICY_PUBLISHED
+  CATALOG_CREATED
+  CATALOG_VERSION_CREATED
+  CATALOG_DRAFT_CHANGED
+  CATALOG_PUBLISHED
+  CATALOG_ARCHIVED
+  CATALOG_REFERENCE_CHANGED
 
   @@map("audit_action")
 }
@@ -82,6 +88,8 @@ enum AuditTarget {
   STAFF_GRANT
   AUTH_SESSION
   POLICY_REVISION
+  PACKAGE
+  SESSION_TYPE
 
   @@map("audit_target")
 }
@@ -235,4 +243,80 @@ model IdempotencyKey {
   @@unique([actorId, operation, key])
   @@index([expiresAt])
   @@map("idempotency_key")
+}
+
+enum PackageKind {
+  TIME
+  SESSION
+
+  @@map("package_kind")
+}
+
+enum SessionTypeMode {
+  INDIVIDUAL
+  GROUP
+
+  @@map("session_type_mode")
+}
+
+// All offers in this slice are public. The reviewed SQL protects archival and issued history.
+model Package {
+  id         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  code       String           @unique(map: "package_code_key") @db.VarChar(40)
+  archivedAt DateTime?        @map("archived_at") @db.Timestamptz(6)
+  versions   PackageVersion[]
+
+  @@map("package")
+}
+
+model PackageVersion {
+  id               String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt        DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  packageId        String                      @map("package_id") @db.Uuid
+  version          Int
+  basedOnVersionId String?                     @map("based_on_version_id") @db.Uuid
+  name             String                      @db.VarChar(120)
+  description      String                      @db.VarChar(2000)
+  price            Decimal                     @db.Decimal(19, 4)
+  currency         String                      @default("SAR") @db.VarChar(3)
+  kind             PackageKind
+  validityDays     Int                         @map("validity_days")
+  sessionAllowance Int?                        @map("session_allowance")
+  draftRevision    Int                         @default(1) @map("draft_revision")
+  publishedAt      DateTime?                   @map("published_at") @db.Timestamptz(6)
+  supersededAt     DateTime?                   @map("superseded_at") @db.Timestamptz(6)
+  package          Package                     @relation(fields: [packageId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "package_version_package_id_fkey")
+  basedOnVersion   PackageVersion?             @relation("PackageVersionBase", fields: [packageId, basedOnVersionId], references: [packageId, id], onDelete: Restrict, onUpdate: NoAction, map: "package_version_base_fkey")
+  derivedVersions  PackageVersion[]            @relation("PackageVersionBase")
+  eligibility      PackageVersionSessionType[]
+
+  // The reviewed SQL adds the partial unique index for the unsuperseded issued version.
+  @@unique([packageId, version], map: "package_version_package_id_version_key")
+  @@unique([packageId, id], map: "package_version_package_id_id_key")
+  @@index([packageId, basedOnVersionId], map: "package_version_base_idx")
+  @@map("package_version")
+}
+
+model SessionType {
+  id          String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt   DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  code        String                      @unique(map: "session_type_code_key") @db.VarChar(40)
+  name        String                      @db.VarChar(120)
+  mode        SessionTypeMode
+  archivedAt  DateTime?                   @map("archived_at") @db.Timestamptz(6)
+  eligibility PackageVersionSessionType[]
+
+  @@map("session_type")
+}
+
+model PackageVersionSessionType {
+  packageVersionId String         @map("package_version_id") @db.Uuid
+  sessionTypeId    String         @map("session_type_id") @db.Uuid
+  packageVersion   PackageVersion @relation(fields: [packageVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "package_version_session_type_version_fkey")
+  sessionType      SessionType    @relation(fields: [sessionTypeId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "package_version_session_type_type_fkey")
+
+  @@id([packageVersionId, sessionTypeId], map: "package_version_session_type_pkey")
+  @@index([sessionTypeId], map: "package_version_session_type_type_idx")
+  @@map("package_version_session_type")
 }

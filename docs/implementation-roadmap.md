@@ -1,15 +1,15 @@
 # Implementation roadmap
 
-Milestone 0 ended with the documentation corrections. The owner subsequently authorized Milestone 1 Foundation. No production deployment is authorized.
+Milestone 0 ended with the documentation corrections. The owner subsequently authorized Milestone 1 Foundation. Initial production go-live remains pending under O-14.
 
 | Order | Deliverable | Exit gate |
 |---|---|---|
 | 0. Architecture review | Review the documents and audit corrections. | A01–A06 are addressed in documentation. The owner authorized Foundation. |
-| 1. Foundation | After authorization, initialize Git and the approved monorepo. Pin tooling, establish CI and local Compose, and build identity, authorization, settings, health, and the OpenAPI baseline. | Test denied routes and scoped ownership, independent grants, revocation versus writes, refresh replay, missed socket invalidation, atomic retries, reviewed migrations, and ordinary DB role denial for the private schema. Close audit B06 and approve O-02 before enabling real onboarding. |
-| 2. Commercial and entitlement | Versioned offers, purchases, installments, manual payments, allocations, credit, refund reservations, membership lifecycle, and entitlement ledger. | Close audit B01–B03 and the catalog part of B05 before affected workflows. Pass reconciliation, activation exception, refund uncertainty, and concurrent posting tests. |
+| 1. Foundation | After authorization, initialize Git and the approved monorepo. Pin tooling, establish CI and local Compose, and build identity, authorization, settings, health, and the OpenAPI baseline. | Test denied routes and scoped ownership, independent grants, revocation versus writes, refresh replay, missed socket invalidation, atomic retries, reviewed migrations, and ordinary DB role denial for the private schema. Close audit B06 and the remaining O-02 onboarding choices before enabling real onboarding. |
+| 2. Commercial and entitlement | Versioned offers, purchases, installments, manual payments, allocations, credit, refund reservations, membership lifecycle, and entitlement ledger. | Close audit B01–B03 and the catalog part of B05 before affected workflows. Reconcile O-15 before activation. Pass payment authorization, credit reconciliation, lifecycle, refund uncertainty and concurrent posting tests. |
 | 3. Scheduling and attendance | Coach availability, buffered slots, holds, booking decisions, per-participant revisions, verification, and corrections. | Close audit B04 and the scheduling part of B05. Test PostgreSQL races including post-lock hold expiry and per-participant entitlement. Waitlisting stays disabled unless approved. |
 | 4. Interfaces and delivery | Flutter client, Next.js role views, reports, private commission records and distributions, inbox, SMTP, and socket hints. | Close audit B07–B08 before enabling delivery and commissions. Pass end-to-end workflows, negative commission tests across all data paths, and Redis-loss recovery. |
-| 5. Release readiness | Verify production prerequisites, TLS/SMTP, KVM1 mixed-load performance, off-server backup restore, rollback runbook, and handover. | Close audit B09. Owner approves remaining launch policies and measured readiness. Production deployment is separately authorized. |
+| 5. Release readiness | Verify production prerequisites, TLS/SMTP, KVM1 mixed-load performance, off-server backup restore, rollback runbook, and handover. | Close audit B09. Owner approves remaining launch policies and measured readiness. Initial production deployment requires separate authorization. Subsequent audited deployments follow O-13. |
 
 Proposed repository layout after foundation approval: `apps/backend`, `apps/dashboard`, `apps/mobile`, `packages/api-contract`, `infra`, and `docs`. Use a pnpm TypeScript workspace and native Flutter tooling. Keep Prisma and domain rules inside the backend. Local and production environments remain separate.
 

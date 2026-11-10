@@ -412,7 +412,7 @@
         ],
         "responses": {
           "409": {
-            "description": "Membership activation is outside Foundation"
+            "description": "Admin-only activation boundary, no membership mutation"
           }
         },
         "security": [
@@ -481,11 +481,587 @@
           "Deferred workflow boundaries"
         ]
       }
+    },
+    "/api/v1/packages": {
+      "get": {
+        "operationId": "CatalogController_listPublic",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "description": "Use the nextCursor from the preceding page",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      },
+      "post": {
+        "operationId": "CatalogController_createPackage",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePackageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/packages/management": {
+      "get": {
+        "operationId": "CatalogController_listManagement",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "description": "Use the nextCursor from the preceding page",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/packages/{packageId}/versions/{versionId}": {
+      "get": {
+        "operationId": "CatalogController_publicVersion",
+        "parameters": [
+          {
+            "name": "packageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      },
+      "patch": {
+        "operationId": "CatalogController_editVersion",
+        "parameters": [
+          {
+            "name": "packageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditVersionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/packages/{packageId}/management": {
+      "get": {
+        "operationId": "CatalogController_management",
+        "parameters": [
+          {
+            "name": "packageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "description": "Use the nextCursor from the preceding page",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/packages/{packageId}/management/audit": {
+      "get": {
+        "operationId": "CatalogController_packageAudit",
+        "parameters": [
+          {
+            "name": "packageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "description": "Use the nextCursor from the preceding page",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/packages/{packageId}/versions": {
+      "post": {
+        "operationId": "CatalogController_createVersion",
+        "parameters": [
+          {
+            "name": "packageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVersionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/packages/{packageId}/versions/{versionId}/publish": {
+      "post": {
+        "operationId": "CatalogController_publishVersion",
+        "parameters": [
+          {
+            "name": "packageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishVersionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "409": {
+            "description": "The draft, eligibility or current version changed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/packages/{packageId}/archive": {
+      "post": {
+        "operationId": "CatalogController_archivePackage",
+        "parameters": [
+          {
+            "name": "packageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchivePackageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/session-types": {
+      "get": {
+        "operationId": "CatalogController_listSessionTypes",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "description": "Use the nextCursor from the preceding page",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      },
+      "post": {
+        "operationId": "CatalogController_createSessionType",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionTypeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
+    },
+    "/api/v1/session-types/{sessionTypeId}/archive": {
+      "post": {
+        "operationId": "CatalogController_archiveSessionType",
+        "parameters": [
+          {
+            "name": "sessionTypeId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveSessionTypeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Public catalog"
+        ]
+      }
     }
   },
   "info": {
     "title": "Strength Studio API",
-    "description": "Milestone 1 Foundation",
+    "description": "Strength Studio Foundation and public catalog",
     "version": "1",
     "contact": {}
   },
@@ -622,6 +1198,249 @@
         "required": [
           "reason"
         ]
+      },
+      "CreatePackageDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "price": {
+            "type": "string",
+            "example": "150.00",
+            "description": "Nonnegative SAR amount with at most two decimal places"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "TIME",
+              "SESSION"
+            ]
+          },
+          "validityDays": {
+            "type": "number",
+            "minimum": 1
+          },
+          "sessionAllowance": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1
+          },
+          "sessionTypeIds": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "code": {
+            "type": "string",
+            "example": "FOUNDATION-10"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "price",
+          "kind",
+          "validityDays",
+          "sessionTypeIds",
+          "code"
+        ]
+      },
+      "PackageTermsDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "price": {
+            "type": "string",
+            "example": "150.00",
+            "description": "Nonnegative SAR amount with at most two decimal places"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "TIME",
+              "SESSION"
+            ]
+          },
+          "validityDays": {
+            "type": "number",
+            "minimum": 1
+          },
+          "sessionAllowance": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1
+          },
+          "sessionTypeIds": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "price",
+          "kind",
+          "validityDays",
+          "sessionTypeIds"
+        ]
+      },
+      "CreateVersionDto": {
+        "type": "object",
+        "properties": {
+          "expectedCurrentVersionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "terms": {
+            "nullable": true,
+            "description": "Send null to clone the current version",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PackageTermsDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expectedCurrentVersionId",
+          "terms"
+        ]
+      },
+      "EditVersionDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "price": {
+            "type": "string",
+            "example": "150.00",
+            "description": "Nonnegative SAR amount with at most two decimal places"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "TIME",
+              "SESSION"
+            ]
+          },
+          "validityDays": {
+            "type": "number",
+            "minimum": 1
+          },
+          "sessionAllowance": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1
+          },
+          "sessionTypeIds": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expectedDraftRevision": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "expectedDraftRevision"
+        ]
+      },
+      "PublishVersionDto": {
+        "type": "object",
+        "properties": {
+          "expectedCurrentVersionId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "expectedDraftRevision": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "expectedCurrentVersionId",
+          "expectedDraftRevision"
+        ]
+      },
+      "ArchivePackageDto": {
+        "type": "object",
+        "properties": {
+          "expectedCurrentVersionId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 240
+          }
+        },
+        "required": [
+          "expectedCurrentVersionId"
+        ]
+      },
+      "CreateSessionTypeDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "PERSONAL-TRAINING"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "INDIVIDUAL",
+              "GROUP"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "mode"
+        ]
+      },
+      "ArchiveSessionTypeDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 240
+          }
+        }
       }
     }
   }

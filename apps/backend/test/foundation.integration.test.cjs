@@ -145,16 +145,20 @@ test('client and coach cannot access another account; staff grants remain indepe
   assert.equal(await migrator.user.count({ where: { normalizedEmail: 'invite@studio.example' } }), 0);
 });
 
-test('activation exception and commission routes stay Admin-only even with independent staff grants', async () => {
-  await expectStatus(204, `/staff-grants/${users.staff.id}/membership.activate`, grantOptions(true));
+test('both activation routes and commission reads stay Admin-only even with a stored legacy grant', async () => {
+  await expectStatus(400, `/staff-grants/${users.staff.id}/membership.activate`, grantOptions(true));
+  await migrator.staffGrant.create({ data: {
+    staffUserId: users.staff.id, permission: 'MEMBERSHIP_ACTIVATE', changedById: users.admin.id,
+  } });
   await expectStatus(400, `/staff-grants/${users.staff.id}/commission.read`, grantOptions(true));
   const membership = `/memberships/${randomUUID()}`;
   for (const role of ['staff', 'coach', 'client']) {
+    await expectStatus(403, membership + '/activate', { method: 'POST', access: sessions[role].accessToken });
     await expectStatus(403, membership + '/activate-exception', { method: 'POST', access: sessions[role].accessToken,
       body: { reason: 'Test reason' } });
     await expectStatus(403, '/admin/commissions', { access: sessions[role].accessToken });
   }
-  await expectStatus(409, membership + '/activate', { method: 'POST', access: sessions.staff.accessToken });
+  await expectStatus(409, membership + '/activate', { method: 'POST', access: sessions.admin.accessToken });
   await expectStatus(400, membership + '/activate-exception', { method: 'POST', access: sessions.admin.accessToken, body: { reason: ' ' } });
   await expectStatus(409, membership + '/activate-exception', { method: 'POST', access: sessions.admin.accessToken, body: { reason: 'Test reason' } });
   await expectStatus(409, '/admin/commissions', { access: sessions.admin.accessToken });
@@ -179,9 +183,10 @@ test('concurrent idempotent publication commits one revision, one result, and on
   await expectStatus(403, '/studio-settings', { ...options, access: sessions.staff.accessToken });
   assert.equal((await expectStatus(200, '/studio-settings', { access: sessions.admin.accessToken })).activePolicy.id, a.id);
   const rejected = grantOptions(true);
+  const grantAuditCount = await migrator.auditLog.count({ where: { action: 'STAFF_GRANT_CHANGED' } });
   await expectStatus(404, `/staff-grants/${users.coach.id}/client.manage`, rejected);
   assert.equal(await migrator.idempotencyKey.count({ where: { key: rejected.key } }), 0);
-  assert.equal(await migrator.auditLog.count({ where: { action: 'STAFF_GRANT_CHANGED' } }), 2);
+  assert.equal(await migrator.auditLog.count({ where: { action: 'STAFF_GRANT_CHANGED' } }), grantAuditCount);
 });
 
 test('cross-owner token FK, immutable audit, and private schema privileges are enforced by PostgreSQL', async () => {
@@ -204,6 +209,135 @@ test('cross-owner token FK, immutable audit, and private schema privileges are e
     }));
   }
   assert.equal((await migrator.$queryRaw`SELECT id FROM commission_private.access_probe`)[0].id, 1);
+});
+
+test('public catalog keeps draft, issued, superseded, and archived versions in their proper scopes', async () => {
+  const admin = { access: sessions.admin.accessToken };
+  const staff = { access: sessions.staff.accessToken };
+  const client = { access: sessions.client.accessToken };
+  const write = (actor, body, method = 'POST') => ({ ...actor, method, key: randomUUID(), body });
+
+  await expectStatus(401, '/packages');
+  await expectStatus(403, '/packages', { access: sessions.coach.accessToken });
+  await expectStatus(403, '/packages', staff);
+  await expectStatus(204, `/staff-grants/${users.staff.id}/catalog.manage`, grantOptions(true));
+  await expectStatus(403, '/packages', staff);
+  await expectStatus(403, '/packages/management', client);
+
+  const typeInput = { code: 'individual-training', name: 'Individual training', mode: 'INDIVIDUAL' };
+  await expectStatus(403, '/session-types', write(staff, typeInput));
+  const { sessionTypeId } = await expectStatus(201, '/session-types', write(admin, typeInput));
+  const { sessionTypeId: secondType } = await expectStatus(201, '/session-types',
+    write(admin, { code: 'GROUP-TRAINING', name: 'Group training', mode: 'GROUP' }));
+
+  const terms = {
+    name: 'Ten sessions', description: 'Public session package', price: '150', kind: 'SESSION',
+    validityDays: 30, sessionAllowance: 10, sessionTypeIds: [sessionTypeId],
+  };
+  await expectStatus(400, '/packages', write(staff, { code: 'BAD-PRICE', ...terms, price: '10.001' }));
+  await expectStatus(400, '/packages', write(staff, { code: 'BAD-TERMS', ...terms, sessionAllowance: null }));
+  await expectStatus(400, '/packages', write(staff, { code: 'BAD-TYPE', ...terms, sessionTypeIds: [randomUUID()] }));
+  assert.equal(await migrator.package.count({ where: { code: 'BAD-TYPE' } }), 0);
+  const creation = write(staff, { code: 'ten-sessions', ...terms });
+  const { packageId } = await expectStatus(201, '/packages', creation);
+  assert.deepEqual(await expectStatus(201, '/packages', { ...creation, body: { ...creation.body, price: '150.00' } }),
+    { packageId });
+  assert.equal(await migrator.auditLog.count({ where: { targetId: packageId, action: 'CATALOG_CREATED' } }), 1);
+
+  const offer = '/packages/' + packageId;
+  const { items: [draft] } = await expectStatus(200, offer + '/management', staff);
+  const firstPath = offer + '/versions/' + draft.id;
+  assert.equal(draft.draftRevision, 1);
+  assert.deepEqual((await expectStatus(200, '/packages', client)).items, []);
+  await expectStatus(404, firstPath, client);
+  await expectStatus(403, offer + '/management/audit', staff);
+  await expectStatus(204, `/staff-grants/${users.staff.id}/audit.read`, grantOptions(true));
+
+  await expectStatus(400, firstPath, write(staff, { expectedDraftRevision: 1, name: null }, 'PATCH'));
+  await expectStatus(204, firstPath,
+    write(staff, { expectedDraftRevision: 1, price: '160.5', sessionTypeIds: [secondType] }, 'PATCH'));
+  await expectStatus(409, firstPath + '/publish', write(staff, { expectedDraftRevision: 1, expectedCurrentVersionId: null }));
+  const initialPublish = write(staff, { expectedDraftRevision: 2, expectedCurrentVersionId: null });
+  await expectStatus(204, firstPath + '/publish', initialPublish);
+  await expectStatus(204, firstPath + '/publish', initialPublish);
+  const published = await expectStatus(200, firstPath, client);
+  assert.equal(published.price, '160.50');
+  assert.equal(published.currency, 'SAR');
+  assert.deepEqual(published.sessionTypes.map(type => type.id), [secondType]);
+  assert(!('draftRevision' in published));
+  await expectStatus(409, firstPath, write(staff, { expectedDraftRevision: 2, price: '1.00' }, 'PATCH'));
+
+  for (const query of [
+    runtime.$executeRaw`UPDATE package_version SET price = 1 WHERE id = ${draft.id}::uuid`,
+    runtime.$executeRaw`UPDATE package_version SET published_at = NULL WHERE id = ${draft.id}::uuid`,
+    runtime.$executeRaw`DELETE FROM package_version_session_type WHERE package_version_id = ${draft.id}::uuid`,
+    runtime.$executeRaw`INSERT INTO package_version_session_type VALUES (${draft.id}::uuid, ${sessionTypeId}::uuid)`,
+  ]) {
+    await assert.rejects(query, error => error.code === 'P2010' && error.meta?.code === '23514');
+  }
+
+  const successor = { expectedCurrentVersionId: draft.id, terms: null };
+  const { versionId: next } = await expectStatus(201, offer + '/versions', write(staff, successor));
+  const { versionId: competing } = await expectStatus(201, offer + '/versions', write(staff, successor));
+  await assert.rejects(runtime.$executeRaw`UPDATE package_version SET published_at = clock_timestamp() WHERE id = ${competing}::uuid`,
+    error => error.code === 'P2010' && error.meta?.code === '23505');
+  const body = { expectedCurrentVersionId: draft.id, expectedDraftRevision: 1 };
+  const responses = await Promise.all([next, competing].map(id => request(offer + '/versions/' + id + '/publish', write(staff, body))));
+  assert.deepEqual(responses.map(response => response.status).sort(), [204, 409]);
+  const winner = responses[0].status === 204 ? next : competing;
+  await expectStatus(404, firstPath, client);
+  assert.equal((await expectStatus(200, '/packages', client)).items[0].id, winner);
+  assert.equal((await expectStatus(200, offer + '/management', staff)).items.length, 3);
+  const auditPage = await expectStatus(200, offer + '/management/audit?limit=1', staff);
+  assert.equal(auditPage.items.length, 1);
+  assert(auditPage.nextCursor);
+  const history = await expectStatus(200, offer + '/management/audit?after=' + auditPage.nextCursor, staff);
+  const actions = [auditPage.items[0], ...history.items];
+  assert.equal(actions.filter(event => event.action === 'CATALOG_PUBLISHED').length, 2);
+  assert.equal(actions.find(event => event.details.previousVersionId === draft.id).details.versionId, winner);
+  await expectStatus(204, `/staff-grants/${users.staff.id}/catalog.read`, grantOptions(true));
+  assert.equal((await expectStatus(200, '/packages', staff)).items[0].id, winner);
+
+  const archive = write(staff, { expectedCurrentVersionId: winner, reason: 'Offer retired' });
+  await expectStatus(204, offer + '/archive', archive);
+  await expectStatus(404, offer + '/versions/' + winner, client);
+  assert.deepEqual((await expectStatus(200, '/packages', client)).items, []);
+  const archived = await expectStatus(200, offer + '/management', staff);
+  assert(archived.archivedAt);
+  assert.equal(archived.items.length, 3);
+  assert.equal(archived.items.find(version => version.id === draft.id).price, '160.50');
+  assert.equal((await migrator.auditLog.findFirstOrThrow({ where: { targetId: packageId, action: 'CATALOG_ARCHIVED' } })).reason,
+    'Offer retired');
+  await expectStatus(204, `/staff-grants/${users.staff.id}/catalog.manage`, grantOptions(false));
+  await expectStatus(403, offer + '/archive', archive);
+  await expectStatus(403, offer + '/management/audit', staff);
+});
+
+test('zero-price publication and session-type retirement enforce catalog authority and eligibility', async () => {
+  const admin = { access: sessions.admin.accessToken };
+  const staff = { access: sessions.staff.accessToken };
+  const client = { access: sessions.client.accessToken };
+  const write = (actor, body) => ({ ...actor, method: 'POST', key: randomUUID(), body });
+  await expectStatus(204, `/staff-grants/${users.staff.id}/catalog.manage`, grantOptions(true));
+  const { sessionTypeId } = await expectStatus(201, '/session-types',
+    write(admin, { code: 'INTRO', name: 'Intro session', mode: 'GROUP' }));
+  const terms = { name: 'Intro offer', description: '', price: '0.00', kind: 'TIME', validityDays: 7, sessionTypeIds: [sessionTypeId] };
+  const { packageId } = await expectStatus(201, '/packages', write(staff, { code: 'INTRO-OFFER', ...terms }));
+  const offer = '/packages/' + packageId;
+  const { items: [draft] } = await expectStatus(200, offer + '/management', staff);
+  const version = offer + '/versions/' + draft.id;
+  const firstPublish = { expectedCurrentVersionId: null, expectedDraftRevision: 1 };
+  await expectStatus(403, version + '/publish', write(staff, firstPublish));
+  await expectStatus(204, version + '/publish', write(admin, firstPublish));
+  const { versionId } = await expectStatus(201, offer + '/versions', write(staff, { expectedCurrentVersionId: draft.id, terms: null }));
+  const archiveType = '/session-types/' + sessionTypeId + '/archive';
+  await expectStatus(403, archiveType, write(staff, {}));
+  await expectStatus(204, archiveType, write(admin, {}));
+  assert(!(await expectStatus(200, '/session-types', client)).items.some(type => type.id === sessionTypeId));
+  assert.deepEqual((await expectStatus(200, version, client)).sessionTypes.map(type => type.id), [sessionTypeId]);
+  await expectStatus(409, offer + '/versions/' + versionId + '/publish',
+    write(admin, { expectedCurrentVersionId: draft.id, expectedDraftRevision: 1 }));
+  assert.equal((await expectStatus(200, version, client)).price, '0.00');
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
