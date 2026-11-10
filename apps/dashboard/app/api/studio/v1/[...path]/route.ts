@@ -1,25 +1,44 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
 import { accessCookie, api, refreshCookie, reply, trustedOrigin, validCsrf } from '../../../../../lib/session';
 
 type Route = { params: Promise<{ path: string[] }> };
 
-async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST') {
-  const path = (await route.params).path.join('/');
-  if ((method === 'GET' && path !== 'me') || (method === 'POST' && path !== 'auth/socket-ticket')) {
-    return reply({ code: 'NOT_FOUND' }, 404);
-  }
+async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST' | 'PATCH') {
+  const { path: parts } = await route.params;
+  const legacy = method === 'GET' && parts.length === 1 && parts[0] === 'me' ? 'me'
+    : method === 'POST' && parts.length === 2 && parts[0] === 'auth' && parts[1] === 'socket-ticket' ? 'auth/socket-ticket' : null;
+  const catalog = catalogRoute(method, parts);
+  if (!legacy && !catalog) return reply({ code: 'NOT_FOUND' }, 404);
   const token = request.cookies.get(accessCookie)?.value;
   if (!token) return reply({ code: 'UNAUTHENTICATED' }, 401);
   try {
-    if (method === 'POST') {
+    if (method !== 'GET') {
       const refresh = request.cookies.get(refreshCookie)?.value;
       if (!trustedOrigin(request) || !refresh || !validCsrf(request, refresh)) return reply({ code: 'CSRF_DENIED' }, 403);
     }
-    const result = await api(path, method, { token });
-    if (!result.ok) return reply({ code: 'API_REQUEST_FAILED' }, result.status);
-    const body = await result.json();
-    return reply(path === 'me' ? { id: body.id, email: body.email, role: body.role }
-      : { ticket: body.ticket, expiresAt: body.expiresAt });
+    if (legacy) {
+      const result = await api(legacy, method, { token });
+      if (!result.ok) return reply({ code: 'API_REQUEST_FAILED' }, result.status);
+      const body = await result.json();
+      return reply(legacy === 'me' ? { id: body.id, email: body.email, role: body.role }
+        : { ticket: body.ticket, expiresAt: body.expiresAt });
+    }
+    if (!catalog) return reply({ code: 'NOT_FOUND' }, 404);
+    const query = catalogQuery(catalog, request.nextUrl.searchParams);
+    if (!query) return reply({ code: 'INVALID_INPUT' }, 400);
+    let options: Parameters<typeof api>[2] = { token, query };
+    if (method !== 'GET') {
+      const key = request.headers.get('idempotency-key') ?? '';
+      if (!/^[a-zA-Z0-9._-]{1,128}$/.test(key)) return reply({ code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+      const payload = await catalogBody(request);
+      if ('status' in payload) return reply({ code: payload.status === 413 ? 'PAYLOAD_TOO_LARGE' : 'INVALID_INPUT' }, payload.status);
+      options = { token, body: payload.body, idempotencyKey: key };
+    }
+    const result = await api(parts.join('/'), method, options);
+    if (!result.ok) return reply(await catalogError(result), result.status);
+    if (result.status === 204) return new NextResponse(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+    return reply(catalogResponse(catalog, await result.json()), result.status);
   } catch {
     return reply({ code: 'DASHBOARD_UNAVAILABLE' }, 503);
   }
@@ -31,4 +50,8 @@ export function GET(request: NextRequest, route: Route) {
 
 export function POST(request: NextRequest, route: Route) {
   return forward(request, route, 'POST');
+}
+
+export function PATCH(request: NextRequest, route: Route) {
+  return forward(request, route, 'PATCH');
 }

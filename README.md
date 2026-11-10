@@ -1,6 +1,6 @@
 # Strength Studio
 
-Foundation and the public package catalog for the single-studio management platform. The workspace contains a NestJS API and a minimal Next.js sign-in surface. The Flutter directory records the mobile contract for its later interface milestone.
+Foundation and the public package catalog for the single-studio management platform. The workspace contains a NestJS API and a Next.js catalog dashboard. The Flutter directory records the mobile contract for its later interface milestone.
 
 ## Local setup
 
@@ -40,7 +40,7 @@ pnpm seed:local
 unset LOCAL_ADMIN_PASSWORD LOCAL_ADMIN_EMAIL
 ```
 
-With the API running, start the dashboard in a second terminal with `pnpm dev:dashboard`. Open [the local dashboard](http://localhost:3001), matching `DASHBOARD_ORIGIN` in the sample configuration. It provides local sign-in, session restore, and sign-out. It does not include studio workflow screens.
+With the API running against a database that already has the catalog schema, start the dashboard with `pnpm dev:dashboard`. Open [the local dashboard](http://localhost:3001), matching `DASHBOARD_ORIGIN` in `.env`. Set `API_BASE_URL` to the API origin and configure `DASHBOARD_CSRF_KEY`. Sign in as Admin to manage packages and session types. Staff need explicit catalog grants. A manager also needs `catalog.read` to choose active session types, and `audit.read` to see package audit events.
 
 ## Verification
 
@@ -50,6 +50,14 @@ pnpm openapi
 ```
 
 The unit suite needs no database. The integration suite uses the documented loopback connection strings to create and migrate an isolated temporary PostgreSQL database. It drops only that database on exit. It exercises real NestJS routes, Socket.IO, DB-role denial, and the built Next.js session routes. The migrator needs permission to create and drop the disposable test database. Both application builds are prerequisites. A GitHub Actions workflow is available if the repository is hosted there.
+
+To test the catalog dashboard without applying migrations, build both apps with `pnpm build`, stop services connected to the local `strength_studio` database, then run:
+
+```sh
+node --env-file=.env --test apps/dashboard/test/catalog.integration.test.cjs
+```
+
+The dashboard tests require an already-migrated loopback database. They clone it into a disposable database, seed role fixtures in that copy, and start the built dashboard and backend on loopback. The local database owner needs permission to clone and drop the disposable copy.
 
 ## Implemented scope
 

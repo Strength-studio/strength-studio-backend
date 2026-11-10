@@ -47,7 +47,7 @@ Use strict DTOs, decimal strings with currency, UTC instants and separate busine
 | POST `/packages/{packageId}/versions/{versionId}/publish`, `/packages/{packageId}/archive` | `catalog.manage`. Only Admin can publish a SAR 0 version. Publish requires the expected draft revision and current version ID. Archive requires the expected current version ID. Use explicit null when no version is issued. |
 | POST `/session-types`, `/session-types/{sessionTypeId}/archive` | Admin only. Archived types remain in issued history and cannot be used for new publication. |
 
-Use `Idempotency-Key` for all catalog writes. List responses use `items` and `nextCursor`. Pass `nextCursor` as `after` for the next page. The NestJS routes are available directly. The dashboard relay has no catalog routes yet.
+Use `Idempotency-Key` for all catalog writes. List responses use `items` and `nextCursor`. Pass `nextCursor` as `after` for the next page. The dashboard relays the listed methods and routes with the session bearer credential. Catalog writes require trusted Origin and session-bound CSRF, and the relay forwards bounded JSON and the idempotency key.
 
 ## Write retries
 
@@ -57,6 +57,6 @@ References: [OWASP CSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets
 
 ## Foundation boundary
 
-The API exposes liveness and PostgreSQL readiness, sign-in and token operations, scoped account reads, non-Admin disablement, staff grant changes, and studio settings. The local dashboard relay allows only `GET /me` and `POST /auth/socket-ticket` upstream. It keeps tokens in host-only cookies and binds its CSRF header to the current refresh credential. Foundation technical defaults are five-minute access tokens, a seven-day absolute refresh session, and 30-second single-use socket tickets.
+The API exposes liveness and PostgreSQL readiness, sign-in and token operations, scoped account reads, non-Admin disablement, staff grant changes, and studio settings. The dashboard relay allows `GET /me`, `POST /auth/socket-ticket` and the catalog routes above. It keeps tokens in host-only cookies and binds its CSRF header to the current refresh credential. Foundation technical defaults are five-minute access tokens, a seven-day absolute refresh session, and 30-second single-use socket tickets.
 
 The invitation, registration, verification, and recovery routes return `ONBOARDING_POLICY_PENDING` for permitted requests. Ordinary activation, the separate Admin exception, and commission reads return `WORKFLOW_NOT_ENABLED` after authorization and input checks. The API rejects new Staff activation grants and denies both stubs to Staff even when a legacy row exists. See [O-15](milestone-2-readiness-review.md#o-15-authorization-conflict). No membership or commission records are loaded or mutated. See [local setup](../README.md).

@@ -53,18 +53,26 @@ export function clearSession(status = 200) {
   return response;
 }
 
-export async function api(path: string, method: 'GET' | 'POST', options: { token?: string; body?: object } = {}) {
+export async function api(path: string, method: 'GET' | 'POST' | 'PATCH', options: {
+  token?: string;
+  body?: object;
+  query?: URLSearchParams;
+  idempotencyKey?: string;
+} = {}) {
   const base = new URL(process.env.API_BASE_URL ?? '');
   const local = ['localhost', '127.0.0.1'].includes(base.hostname);
   if (base.origin !== base.href.slice(0, -1) || base.username || base.password
     || (base.protocol !== 'https:' && !(base.protocol === 'http:' && local))) {
     throw new Error('API_BASE_URL must be an HTTPS origin or loopback HTTP origin');
   }
-  return fetch(base.origin + '/api/v1/' + path, {
+  const url = new URL(base.origin + '/api/v1/' + path);
+  if (options.query) url.search = options.query.toString();
+  return fetch(url, {
     method, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000),
     headers: {
       ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
     },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });

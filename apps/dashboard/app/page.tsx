@@ -1,13 +1,18 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
-
-type Account = { email: string; role: string };
+import { FormEvent, useCallback, useEffect, useState } from 'react';
+import type { Account } from '../lib/catalog';
+import { CatalogDashboard } from './catalog/dashboard';
+import { Icon } from './catalog/ui';
 
 export default function Home() {
   const [account, setAccount] = useState<Account>();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const expired = useCallback(() => {
+    setAccount(undefined);
+    setMessage('Your session expired. Sign in or restore your session.');
+  }, []);
 
   async function readAccount() {
     const response = await fetch('/api/studio/v1/me', { cache: 'no-store' });
@@ -67,18 +72,26 @@ export default function Home() {
     });
   }
 
-  return <main>
-    <h1>Strength Studio</h1>
-    <p>Foundation sign-in</p>
-    {account ? <>
-      <p>Signed in as {account.email} ({account.role})</p>
-      <button type="button" disabled={busy} onClick={() => sessionAction('logout')}>Sign out</button>
-    </> : <form onSubmit={login}>
-      <label>Email <input name="email" type="email" autoComplete="username" required /></label>{' '}
-      <label>Password <input name="password" type="password" autoComplete="current-password" required /></label>{' '}
-      <button disabled={busy}>Sign in</button>
-    </form>}
-    <button type="button" disabled={busy} onClick={() => sessionAction('refresh')}>Restore existing session</button>
-    <p role="status">{message}</p>
+  if (account && ['ADMIN', 'STAFF'].includes(account.role)) {
+    return <CatalogDashboard key={account.id} account={account} busy={busy} sessionNotice={message}
+      onSignOut={() => sessionAction('logout')} onExpired={expired} />;
+  }
+
+  return <main className="entry">
+    <section className="panel entry-card">
+      <div className="brand"><span className="brand-mark"><Icon name="layers" size={24} /></span>
+        <div><strong>Strength Studio</strong><span>Studio operations</span></div></div>
+      <h1>{account ? 'You’re signed in' : 'Sign in to the studio'}</h1>
+      {account ? <>
+        <p className="muted">Signed in as {account.email} ({account.role}). This account has no catalog management workspace.</p>
+        <button className="button secondary" type="button" disabled={busy} onClick={() => sessionAction('logout')}>Sign out</button>
+      </> : <form onSubmit={login}>
+        <label>Email<input name="email" type="email" autoComplete="username" required /></label>
+        <label>Password<input name="password" type="password" autoComplete="current-password" required /></label>
+        <button className="button primary" disabled={busy}>{busy ? 'Working…' : 'Sign in'}</button>
+      </form>}
+      <button className="button quiet" type="button" disabled={busy} onClick={() => sessionAction('refresh')}>Restore existing session</button>
+      {message && <p className="muted" role="status">{message}</p>}
+    </section>
   </main>;
 }
