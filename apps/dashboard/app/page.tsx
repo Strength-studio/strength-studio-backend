@@ -47,7 +47,8 @@ export default function Home() {
       const response = await fetch('/api/session/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
       });
-      if (response.ok) await readAccount();
+      // A document reload discards the previous account's Next.js history state.
+      if (response.ok) window.location.reload();
       else setMessage('Sign-in failed.');
     });
   }
@@ -67,6 +68,10 @@ export default function Home() {
       if (!challenge.ok) { setAccount(undefined); setMessage('Sign in again.'); return; }
       const { csrfToken } = await challenge.json();
       const response = await fetch(`/api/session/${action}`, { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } });
+      if (response.ok && action === 'logout') {
+        window.location.reload();
+        return;
+      }
       if (!response.ok) setMessage('Could not update the session. You may need to sign in again.');
       await readAccount();
     });

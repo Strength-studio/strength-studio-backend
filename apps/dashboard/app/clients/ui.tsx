@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Icon } from '../catalog/ui';
+import { ClientHistoryBoundary } from './history-boundary';
 
 export const stateLabels = {
   ACTIVE: 'Active',
@@ -16,7 +17,7 @@ export function ClientStateBadge({ state }: { state: keyof typeof stateLabels })
 }
 
 export function ClientWorkspace({ detail, children }: { detail?: boolean; children: ReactNode }) {
-  return <div className="workspace">
+  return <ClientHistoryBoundary>
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark"><Icon name="layers" size={23} /></span>
         <div><strong>Strength Studio</strong><span>Studio operations</span></div>
@@ -36,7 +37,7 @@ export function ClientWorkspace({ detail, children }: { detail?: boolean; childr
       </span></div>
       <div className="workspace-content">{children}</div>
     </main>
-  </div>;
+  </ClientHistoryBoundary>;
 }
 
 export function ClientReadError({ status, retry }: { status: number; retry?: string }) {

@@ -10,6 +10,7 @@ const { PrismaClient } = require('../../backend/node_modules/@prisma/client');
 const { startApp } = require('../../backend/dist/app.js');
 const { loadConfig } = require('../../backend/dist/platform/config.js');
 const { hashPassword } = require('../../backend/dist/identity/password.js');
+const { withChrome } = require('./chrome.cjs');
 
 const fixturePassword = 'dashboard integration only passphrase';
 const dbName = 'studio_dashboard_test_' + randomBytes(6).toString('hex');
@@ -23,6 +24,7 @@ const userPrefix = 'catalog-test-' + randomBytes(5).toString('hex');
 const email = name => userPrefix + '-' + name.toLowerCase() + '@example.invalid';
 const clientName = key => userPrefix + ' ' + key;
 let control, fixture, api, dashboard, origin, created = false, exited;
+let upstreamRequests = 0;
 const signedIn = new Map();
 
 function localUrls() {
@@ -77,6 +79,7 @@ before(async () => {
   origin = 'http://127.0.0.1:' + port;
   api = await startApp({ ...loadConfig({ ...process.env, DATABASE_URL: runtime.href, DASHBOARD_ORIGIN: origin }),
     host: '127.0.0.1', port: 0 });
+  api.getHttpServer().on('request', () => { upstreamRequests++; });
   const project = resolve(__dirname, '..');
   dashboard = spawn(process.execPath, [resolve(project, 'node_modules/next/dist/bin/next'), 'start',
     '--hostname', '127.0.0.1', '--port', String(port)], {
@@ -137,6 +140,7 @@ async function relay(actor, status, route, options = {}) {
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(response.headers.get('set-cookie'), null);
   assert.equal(response.headers.get('authorization'), null);
+  if (status === 405) assert.equal(response.headers.get('allow'), 'GET');
   assert(!/accessToken|refreshToken|__Host-ss_/.test(raw), 'Tokens must stay server-side');
   for (const part of actor.cookie.split('; ')) assert(!raw.includes(part.split('=')[1]));
   return raw ? JSON.parse(raw) : null;
@@ -239,10 +243,126 @@ test('Client pages and relay reject unauthorized navigation and keep Client rout
   await relay(admin, 400, 'clients?q=' + 'a'.repeat(121));
   await relay(admin, 404, 'clients/' + client.id + '/audit');
   for (const method of ['POST', 'PATCH']) {
-    await relay(admin, 404, 'clients/' + client.id, { method, csrf: '' });
-    await relay(admin, 404, 'clients/' + client.id, { method });
+    await relay(admin, 405, 'clients/' + client.id, { method, csrf: '' });
+    await relay(admin, 405, 'clients/' + client.id, { method });
   }
   await relay(admin, 200, 'clients', { source: 'https://example.invalid', csrf: '', headers: { origin: 'https://example.invalid' } });
+});
+
+test('Client relay enforces the method and path matrix before sending upstream requests', async () => {
+  const admin = await signIn('admin');
+  const client = await signIn('client');
+  const { id } = await relay(client, 200, 'me/client-profile');
+  const routes = [
+    { path: 'clients', actor: admin, supported: true },
+    { path: 'clients/' + id, actor: admin, supported: true },
+    { path: 'clients/' + id + '/audit', actor: admin, supported: false },
+    { path: 'me/client-profile', actor: client, supported: true },
+  ];
+  for (const method of ['GET', 'HEAD', 'OPTIONS', 'POST', 'PATCH', 'PUT', 'DELETE']) {
+    for (const { path, actor, supported } of routes) {
+      const forwards = method === 'GET' && supported;
+      const status = forwards ? 200 : supported ? 405 : 404;
+      const before = upstreamRequests;
+      const body = await relay(actor, status, path, { method });
+      assert.equal(upstreamRequests - before, forwards ? 1 : 0, method + ' ' + path);
+      if (!forwards && method !== 'HEAD') assert.deepEqual(body, {
+        code: supported ? 'METHOD_NOT_ALLOWED' : 'NOT_FOUND',
+      });
+    }
+  }
+  for (const path of ['packages', 'me']) {
+    const before = upstreamRequests;
+    assert.equal(await relay(admin, 200, path, { method: 'HEAD' }), null);
+    assert.equal(upstreamRequests - before, 1);
+    const options = await fetch(origin + '/api/studio/v1/' + path, { method: 'OPTIONS' });
+    assert.equal(options.status, 204);
+    assert.equal(options.headers.get('allow'), 'GET, HEAD, OPTIONS, PATCH, POST');
+    assert.equal(upstreamRequests - before, 1);
+  }
+});
+
+const browserTest = { skip: !process.env.STUDIO_TEST_CHROME, timeout: 30_000 };
+
+async function browserSignIn(browser, name) {
+  // The form is rendered before hydration. Wait for its React handler to accept the submit and reset it.
+  await browser.until(`(() => {
+    const form = document.querySelector('form');
+    if (!form?.elements.email) return false;
+    form.elements.email.value = ${JSON.stringify(email(name))};
+    form.elements.password.value = ${JSON.stringify(fixturePassword)};
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    return form.elements.password.value === '';
+  })()`, 'handled sign-in form');
+  await browser.until(`document.querySelector('[aria-label="Sign out"]') &&
+    document.querySelector('.account').textContent.includes(${JSON.stringify(email(name))})`, 'signed-in dashboard');
+}
+
+async function openClientDirectory(browser) {
+  await browser.go('/');
+  await browserSignIn(browser, 'clientManager');
+  await browser.until(`document.querySelector('nav a[href="/clients"]')`, 'Client navigation');
+  await browser.evaluate(`document.querySelector('nav a[href="/clients"]').click(); true`);
+  await browser.until(`document.body.innerText.includes(${JSON.stringify(clientName('client'))})`, 'authorized directory');
+}
+
+async function browserSignOut(browser) {
+  await browser.until(`document.querySelector('[aria-label="Sign out"]')`, 'sign-out button');
+  await browser.evaluate(`document.querySelector('[aria-label="Sign out"]').click(); true`);
+  await browser.until(`document.querySelector('form [name=email]') &&
+    fetch('/api/studio/v1/me').then(response => response.status === 401)`, 'signed-out dashboard');
+}
+
+async function assertClientHistoryDenied(browser, path, status) {
+  await browser.evaluate('history.back(); true');
+  const message = status === 401 ? 'Sign in to continue.' : 'Your account does not have access to Client Management.';
+  await browser.until(`location.pathname === ${JSON.stringify(path)} &&
+    document.body.innerText.includes(${JSON.stringify(message)})`, 'protected history entry');
+  const text = await browser.evaluate('document.body.innerText');
+  assert(!text.includes(userPrefix), 'Previous Client records must not appear in the restored page');
+  assert.equal(await browser.evaluate(`fetch('/api/studio/v1/clients').then(response => response.status)`), status);
+}
+
+test('Client browser history hides the directory after logout', browserTest, async () => {
+  await withChrome(origin, async browser => {
+    await openClientDirectory(browser);
+    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
+    await browserSignOut(browser);
+    await assertClientHistoryDenied(browser, '/clients', 401);
+  });
+});
+
+test('Client browser history hides the directory after an account switch', browserTest, async () => {
+  await withChrome(origin, async browser => {
+    await openClientDirectory(browser);
+    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
+    await browserSignOut(browser);
+    await browserSignIn(browser, 'noGrant');
+    await assertClientHistoryDenied(browser, '/clients', 403);
+  });
+});
+
+test('Client browser history protects a directly loaded detail document', browserTest, async () => {
+  await withChrome(origin, async browser => {
+    await openClientDirectory(browser);
+    const path = await browser.evaluate(`Array.from(document.querySelectorAll('tbody a')).find(
+      link => link.textContent.trim() === ${JSON.stringify(clientName('client'))}).pathname`);
+    await browser.go(path);
+    await browser.until(`document.body.innerText.includes('Account details') &&
+      document.body.innerText.includes(${JSON.stringify(email('client'))})`, 'direct Client detail');
+    // Exercise the persisted lifecycle even when Chrome evicts snapshots on cookie changes.
+    await browser.until(`(() => {
+      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+      return getComputedStyle(document.querySelector('.workspace')).visibility === 'hidden';
+    })()`, 'concealed history snapshot');
+    await browser.evaluate(`window.previousClientDocument = true;
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })); true`);
+    await browser.until(`!window.previousClientDocument && document.body.innerText.includes('Account details')`,
+      'detail reloaded after a persisted restore');
+    await browser.go('/');
+    await browserSignOut(browser);
+    await assertClientHistoryDenied(browser, path, 401);
+  });
 });
 
 test('real catalog commands preserve roles, history and conflict codes through the dashboard relay', async () => {

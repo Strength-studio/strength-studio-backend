@@ -9,6 +9,10 @@ function clientState(value: unknown): value is ClientState {
   return clientStates.some(state => state === value);
 }
 
+export function isClientRelayPath(parts: string[]) {
+  return parts[0] === 'clients' || (parts[0] === 'me' && parts[1] === 'client-profile');
+}
+
 export function clientRoute(method: string, parts: string[]) {
   if (method !== 'GET') return null;
   if (parts.length === 1 && parts[0] === 'clients') return 'list';

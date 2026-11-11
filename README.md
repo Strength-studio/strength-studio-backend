@@ -61,6 +61,13 @@ node --env-file=.env --test apps/dashboard/test/catalog.integration.test.cjs
 
 The dashboard tests require an already-migrated loopback database. They clone it into a disposable database, seed role fixtures in that copy, and start the built dashboard and backend on loopback. The local database owner needs permission to clone and drop the disposable copy.
 
+Run the Client history regressions separately with a local Chrome or Chromium executable.
+
+```sh
+STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket --env-file=.env --test \
+  --test-name-pattern='Client browser history' apps/dashboard/test/catalog.integration.test.cjs
+```
+
 ## Implemented scope
 
 - Argon2id sign-in for active, verified accounts, short-lived bearer tokens, refresh rotation and replay revocation, logout, and single-use socket tickets. Current roles and staff grants are checked server-side. Existing sockets disconnect on invalidation or failed revalidation.
