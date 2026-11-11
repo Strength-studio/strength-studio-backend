@@ -7,6 +7,8 @@ import { json } from 'express';
 import helmet from 'helmet';
 import { CatalogController } from './catalog/catalog.controller';
 import { CatalogService } from './catalog/catalog.service';
+import { ClientController } from './clients/client.controller';
+import { ClientService } from './clients/client.service';
 import { AccountsController, AuthController, DeferredController } from './identity/identity.controller';
 import { AccessEvents } from './identity/access-events';
 import { AccessGuard } from './identity/access.guard';
@@ -26,10 +28,11 @@ export async function createApp(config: Config) {
   const app = await NestFactory.create<NestExpressApplication>({
     module: AppModule,
     imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
-    controllers: [HealthController, AuthController, AccountsController, StudioController, DeferredController, CatalogController],
+    controllers: [HealthController, AuthController, AccountsController, StudioController, DeferredController, CatalogController,
+      ClientController],
     providers: [
       { provide: CONFIG, useValue: config },
-      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService,
+      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService,
       { provide: APP_GUARD, useClass: ThrottlerGuard },
       { provide: APP_GUARD, useClass: AccessGuard },
     ],

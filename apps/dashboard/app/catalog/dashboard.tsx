@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import {
   Account, activeTypes, AuditEvent, capability, CatalogError, currentVersion, dateTime, errorText, get, money, Offer,
@@ -254,11 +255,14 @@ async function loadAccess() {
   return { manage, read };
 }
 
+const loadClientAccess = () => capability('clients?limit=1');
+
 export function CatalogDashboard({ account, busy, sessionNotice, onSignOut, onExpired }: Expiry & {
   account: Account; busy: boolean; sessionNotice: string; onSignOut: () => void;
 }) {
   const admin = account.role === 'ADMIN';
   const access = useRead(loadAccess, onExpired);
+  const clientAccess = useRead(loadClientAccess, onExpired);
   const read = !!access.value?.read;
   const manage = !!access.value?.manage;
   const [tab, setTab] = useState<Tab>('manage');
@@ -288,6 +292,7 @@ export function CatalogDashboard({ account, busy, sessionNotice, onSignOut, onEx
         {visibleTabs.map(item => <button key={item} type="button" className={item === currentTab ? 'active' : ''}
           aria-current={item === currentTab ? 'page' : undefined} onClick={() => { setTab(item); setNotice(''); }}>
           <Icon name={tabs[item].icon} />{tabs[item].name}</button>)}
+        {clientAccess.value && <Link href="/clients" prefetch={false}><Icon name="users" /> Clients</Link>}
       </nav>
       <div className="sidebar-foot"><span className="status-dot" /> Studio dashboard</div>
     </aside>
@@ -309,7 +314,9 @@ export function CatalogDashboard({ account, busy, sessionNotice, onSignOut, onEx
         {!access.value ? <ReadState error={access.error} onRetry={access.reload} label="Checking catalog access…" />
           : !currentTab ? <div className="empty panel"><strong>No catalog access</strong>
             <span>Your account needs a catalog permission from an Admin.</span>
-            <button type="button" className="button secondary" onClick={access.reload}>Check access again</button>
+            <button type="button" className="button secondary" onClick={() => { access.reload(); clientAccess.reload(); }}>
+              Check access again
+            </button>
           </div>
           : currentTab === 'manage' ? selected
             ? <PackageView key={selected + ':' + generation} id={selected} admin={admin} onExpired={onExpired}

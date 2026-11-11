@@ -40,9 +40,9 @@ small { font-size: .8rem; }
 .brand div > span { display: block; font-size: .75rem; color: var(--muted); }
 .sidebar nav { display: grid; gap: 5px; margin-top: 48px; }
 .sidebar nav p { padding: 0 10px; color: var(--muted); margin-bottom: 8px; }
-.sidebar nav button { display: flex; align-items: center; text-align: left; gap: 11px; width: 100%; padding: 10px; min-height: 43px; border: 1px solid transparent; border-radius: 9px; color: var(--muted); background: transparent; font-weight: 620; white-space: nowrap; }
-.sidebar nav button:hover { background: var(--surface); color: var(--text); }
-.sidebar nav button.active { background: #192f4b; border-color: #294766; color: var(--bright); }
+.sidebar nav :is(button, a) { display: flex; align-items: center; text-align: left; gap: 11px; width: 100%; padding: 10px; min-height: 43px; border: 1px solid transparent; border-radius: 9px; color: var(--muted); background: transparent; font-weight: 620; white-space: nowrap; text-decoration: none; }
+.sidebar nav :is(button, a):hover { background: var(--surface); color: var(--text); }
+.sidebar nav .active { background: #192f4b; border-color: #294766; color: var(--bright); }
 .sidebar-foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: .78rem; }
 .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--green); }
 
@@ -98,6 +98,10 @@ tbody tr:hover { background: #15253a; }
 .package-cell > div { min-width: 0; }
 .text-button { color: var(--text); text-align: left; font-weight: 700; padding: 0; border: 0; background: none; white-space: normal; overflow-wrap: anywhere; }
 .text-button:hover { color: var(--accent); text-decoration: underline; }
+a.button, a.text-button { text-decoration: none; }
+a.text-button:hover { text-decoration: underline; }
+.client-summary { padding: 18px; }
+.client-summary .terms { margin-top: 14px; overflow-wrap: anywhere; }
 .code { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .72rem; overflow-wrap: anywhere; }
 .price { font-weight: 700; }
 .badge, .chip { padding: 3px 8px; border-radius: 20px; border: 1px solid #394b66; background: #202f46; color: #c0cde0; font-size: .7rem; font-weight: 650; }
@@ -178,7 +182,7 @@ textarea { resize: vertical; }
   .sidebar { position: static; height: auto; padding: 14px 13px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
   .sidebar nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0 0; }
   .sidebar nav p, .sidebar-foot { display: none; }
-  .sidebar nav button { width: auto; min-height: 37px; padding: 6px 8px; font-size: .8rem; }
+  .sidebar nav :is(button, a) { width: auto; min-height: 37px; padding: 6px 8px; font-size: .8rem; }
   .workspace-content { padding-top: 23px; gap: 17px; }
   .section-heading { flex-wrap: wrap; align-items: start; }
   .breadcrumb { font-size: .72rem; }

@@ -17,10 +17,13 @@ const roles = {
   admin: ['ADMIN'], noGrant: ['STAFF'], reader: ['STAFF', 'CATALOG_READ'],
   manager: ['STAFF', 'CATALOG_MANAGE'], auditor: ['STAFF', 'CATALOG_MANAGE', 'AUDIT_READ'],
   auditOnly: ['STAFF', 'AUDIT_READ'], client: ['CLIENT'], coach: ['COACH'],
+  clientManager: ['STAFF', 'CLIENT_MANAGE'], clientSecond: ['CLIENT'], clientPending: ['CLIENT'],
 };
 const userPrefix = 'catalog-test-' + randomBytes(5).toString('hex');
 const email = name => userPrefix + '-' + name.toLowerCase() + '@example.invalid';
+const clientName = key => userPrefix + ' ' + key;
 let control, fixture, api, dashboard, origin, created = false, exited;
+const signedIn = new Map();
 
 function localUrls() {
   assert.ok(['test', 'development'].includes(process.env.NODE_ENV), 'Use a local test or development environment');
@@ -54,9 +57,11 @@ before(async () => {
   const passwordHash = await hashPassword(fixturePassword);
   let adminId;
   for (const [key, [role, ...grants]] of Object.entries(roles)) {
+    const pending = key === 'clientPending';
     const user = await fixture.user.create({ data: {
-      normalizedEmail: email(key), role, accountState: 'ACTIVE', passwordHash, emailVerifiedAt: new Date(),
-      ...(role === 'CLIENT' ? { client: { create: { displayName: key } } } : {}),
+      normalizedEmail: email(key), role, accountState: pending ? 'PENDING_VERIFICATION' : 'ACTIVE',
+      passwordHash, emailVerifiedAt: pending ? null : new Date(),
+      ...(role === 'CLIENT' ? { client: { create: { displayName: clientName(key) } } } : {}),
       ...(role === 'COACH' ? { coach: { create: { displayName: key } } } : {}),
     } });
     if (role === 'ADMIN') adminId = user.id;
@@ -99,7 +104,12 @@ after(async () => {
   await control?.$disconnect();
 });
 
-async function signIn(name) {
+function signIn(name) {
+  if (!signedIn.has(name)) signedIn.set(name, login(name));
+  return signedIn.get(name);
+}
+
+async function login(name) {
   const result = await fetch(origin + '/api/session/login', {
     method: 'POST', headers: { origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email(name), password: fixturePassword }),
   });
@@ -150,9 +160,96 @@ test('catalog relay keeps origin, CSRF, route and input boundaries', async () =>
   await relay(admin, 413, 'packages', { ...post, payload: { description: 'x'.repeat(17_000) } });
 });
 
+test('authorized dashboard pages render Client directory filters, pagination, and detail', async () => {
+  const admin = await signIn('admin');
+  const manager = await signIn('clientManager');
+  const list = 'clients?limit=1&q=' + userPrefix.toUpperCase() + '&accountState=ACTIVE&emailVerified=true';
+  const first = await relay(admin, 200, list);
+  assert.equal(first.items.length, 1);
+  const { id, displayName, email: clientEmail } = first.items[0];
+  assert.deepEqual(Object.keys(first.items[0]).sort(), ['accountState', 'createdAt', 'displayName', 'email', 'emailVerified', 'id']);
+  assert.match(first.nextCursor, /^[A-Za-z0-9_-]{48}$/);
+
+  async function page(path, actor = manager) {
+    const response = await fetch(origin + path, { headers: { cookie: actor.cookie } });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    const html = await response.text();
+    for (const part of actor.cookie.split('; ')) assert(!html.includes(part.split('=')[1]));
+    return html;
+  }
+
+  const directory = await page('/' + list);
+  assert.match(directory, /Client directory/);
+  assert.match(directory, /name="q"/);
+  assert.match(directory, /name="accountState"/);
+  assert.match(directory, /name="emailVerified"/);
+  assert.match(directory, new RegExp('/clients/' + id));
+  assert.match(directory, /Next page/);
+  assert.match(directory, new RegExp('href="/clients\\?[^"]*after=' + first.nextCursor));
+  const next = await relay(manager, 200, list + '&after=' + first.nextCursor);
+  assert.equal(next.items.length, 1);
+  assert.notEqual(next.items[0].id, id);
+  assert.equal(next.nextCursor, null);
+  const nextPage = await page('/' + list + '&after=' + first.nextCursor);
+  assert.match(nextPage, new RegExp('/clients/' + next.items[0].id));
+  assert(!nextPage.includes('/clients/' + id));
+  assert.match(nextPage, /First page/);
+  const pending = await page('/clients?q=' + userPrefix + '&accountState=PENDING_VERIFICATION&emailVerified=false');
+  assert(pending.includes(email('clientPending')));
+  assert(!pending.includes(clientEmail));
+  assert.match(await page('/clients?q=missing-client'), /No matching clients/);
+
+  const details = await page('/clients/' + id);
+  assert(details.includes(displayName));
+  assert(details.includes(clientEmail));
+  assert.match(details, /Account details/);
+  assert.match(details, /Back to clients/);
+  const detail = await relay(manager, 200, 'clients/' + id);
+  assert.deepEqual(Object.keys(detail).sort(), [...Object.keys(first.items[0]), 'emailVerifiedAt'].sort());
+  const client = await signIn('client');
+  assert.deepEqual(await relay(client, 200, 'me/client-profile'), {
+    id: (await relay(client, 200, 'me')).id, email: email('client'), displayName: clientName('client'),
+  });
+});
+
+test('Client pages and relay reject unauthorized navigation and keep Client routes read-only', async () => {
+  const admin = await signIn('admin');
+  const { items: [client] } = await relay(admin, 200, 'clients?limit=1');
+  await relay({ cookie: '' }, 401, 'clients');
+  for (const role of ['client', 'coach', 'noGrant', 'reader', 'auditOnly']) {
+    const actor = await signIn(role);
+    await relay(actor, 403, 'clients');
+    await relay(actor, 403, 'clients/' + client.id);
+    for (const path of ['/clients', '/clients/' + client.id]) {
+      const response = await fetch(origin + path, { headers: { cookie: actor.cookie } });
+      const html = await response.text();
+      assert.match(html, /Your account does not have access to Client Management/);
+      assert(!html.includes(client.email));
+      assert.doesNotMatch(html, /<table|href="\/clients/);
+    }
+  }
+  const anonymous = await fetch(origin + '/clients');
+  assert.match(await anonymous.text(), /Sign in to continue/);
+  await relay(admin, 404, 'clients/' + (await relay(admin, 200, 'me')).id);
+  await relay(admin, 403, 'me/client-profile');
+  await relay(admin, 400, 'me/client-profile?id=' + client.id);
+  await relay(admin, 400, 'clients?limit=2&limit=3');
+  await relay(admin, 400, 'clients?emailVerified=1');
+  await relay(admin, 400, 'clients?q=' + 'a'.repeat(121));
+  await relay(admin, 404, 'clients/' + client.id + '/audit');
+  for (const method of ['POST', 'PATCH']) {
+    await relay(admin, 404, 'clients/' + client.id, { method, csrf: '' });
+    await relay(admin, 404, 'clients/' + client.id, { method });
+  }
+  await relay(admin, 200, 'clients', { source: 'https://example.invalid', csrf: '', headers: { origin: 'https://example.invalid' } });
+});
+
 test('real catalog commands preserve roles, history and conflict codes through the dashboard relay', async () => {
   const actors = [];
-  for (const role of Object.keys(roles)) actors.push(await signIn(role));
+  for (const role of ['admin', 'noGrant', 'reader', 'manager', 'auditor', 'auditOnly', 'client', 'coach']) {
+    actors.push(await signIn(role));
+  }
   const [admin, staff, reader, manager, auditor, auditOnly, client, coach] = actors;
   const post = payload => ({ method: 'POST', payload });
   for (const actor of [staff, reader, auditOnly, client, coach]) await relay(actor, 403, 'packages/management');

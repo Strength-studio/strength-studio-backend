@@ -13,6 +13,8 @@ Milestone 0 ended with the documentation corrections. The owner subsequently aut
 
 Proposed repository layout after foundation approval: `apps/backend`, `apps/dashboard`, `apps/mobile`, `packages/api-contract`, `infra`, and `docs`. Use a pnpm TypeScript workspace and native Flutter tooling. Keep Prisma and domain rules inside the backend. Local and production environments remain separate.
 
+Client Management Slice 1 implements the authorized directory, detail, and Client own-profile reads on the Foundation schema. The dashboard includes the directory and detail views. Client profile writes and onboarding are later work. O-02 still gates onboarding. [Implemented API contract](api-contract.md#implemented-client-reads)
+
 ## Readiness after the audit corrections
 
 The [original audit](milestone-0-final-readiness-audit.md) is retained as the pre-correction record. Its Foundation findings are addressed in the current contracts:

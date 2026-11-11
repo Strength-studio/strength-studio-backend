@@ -11,7 +11,7 @@ const { io } = require('socket.io-client');
 const { startApp } = require('../dist/app.js');
 const { loadConfig } = require('../dist/platform/config.js');
 const { hashPassword } = require('../dist/identity/password.js');
-const { digest } = require('../dist/identity/session.service.js');
+const { digest, Sessions } = require('../dist/identity/session.service.js');
 
 const password = 'integration-only fixture passphrase';
 const allowedOrigin = 'http://localhost:3001';
@@ -51,6 +51,7 @@ before(async () => {
     ['admin', Role.ADMIN, AccountState.ACTIVE, true],
     ['raceAdmin', Role.ADMIN, AccountState.ACTIVE, true],
     ['staff', Role.STAFF, AccountState.ACTIVE, true],
+    ['clientManager', Role.STAFF, AccountState.ACTIVE, true],
     ['coach', Role.COACH, AccountState.ACTIVE, true],
     ['client', Role.CLIENT, AccountState.ACTIVE, true],
     ['other', Role.CLIENT, AccountState.ACTIVE, true],
@@ -58,11 +59,13 @@ before(async () => {
     ['pending', Role.CLIENT, AccountState.PENDING_VERIFICATION, false],
     ['disabled', Role.CLIENT, AccountState.DISABLED, true],
     ['unverified', Role.CLIENT, AccountState.ACTIVE, false],
+    ['missingProfile', Role.CLIENT, AccountState.ACTIVE, true],
   ]) {
     users[key] = await migrator.user.create({ data: {
       normalizedEmail: `${key.toLowerCase()}@studio.example`, role, accountState, passwordHash,
       emailVerifiedAt: verified ? new Date() : null,
-      ...(role === Role.CLIENT ? { client: { create: { displayName: key } } } : {}),
+      ...((role === Role.CLIENT && key !== 'missingProfile') || role === Role.COACH
+        ? { client: { create: { displayName: key, createdAt: new Date('2026-11-01T00:00:00Z') } } } : {}),
       ...(role === Role.COACH ? { coach: { create: { displayName: key } } } : {}),
     } });
   }
@@ -74,6 +77,10 @@ before(async () => {
     sessions[key] = await expectStatus(200, '/auth/login', {
       method: 'POST', body: { email: users[key].normalizedEmail, password },
     });
+  }
+  // Reserve the HTTP login limit for tests of the login endpoint and dashboard session route.
+  for (const key of ['clientManager', 'missingProfile']) {
+    sessions[key] = await app.get(Sessions).login(users[key].normalizedEmail, password);
   }
 });
 
@@ -125,6 +132,74 @@ test('invited, unverified, pending, and disabled accounts cannot log in', async 
   for (const name of ['invited', 'pending', 'disabled', 'unverified']) {
     await expectStatus(401, '/auth/login', { method: 'POST', body: { email: users[name].normalizedEmail, password } });
   }
+});
+
+test('Client reads require explicit management access or the authenticated Client owner', async () => {
+  const as = key => ({ access: sessions[key].accessToken });
+  const path = '/clients/' + users.client.id;
+  const self = { id: users.client.id, email: users.client.normalizedEmail, displayName: 'client' };
+  const summary = { ...self, accountState: 'ACTIVE', emailVerified: true, createdAt: '2026-11-01T00:00:00.000Z' };
+  const detail = { ...summary, emailVerifiedAt: users.client.emailVerifiedAt.toISOString() };
+  await expectStatus(401, '/clients');
+  for (const key of ['staff', 'coach', 'client']) {
+    await expectStatus(403, '/clients', as(key));
+    await expectStatus(403, path, as(key));
+  }
+  await expectStatus(403, '/clients/' + users.other.id, as('client'));
+  for (const key of ['admin', 'staff', 'coach']) await expectStatus(403, '/me/client-profile', as(key));
+  assert.deepEqual(await expectStatus(200, '/me/client-profile', as('client')), self);
+  await expectStatus(400, '/me/client-profile?id=' + users.other.id, as('client'));
+  await expectStatus(404, '/me/client-profile', as('missingProfile'));
+
+  await expectStatus(204, `/staff-grants/${users.clientManager.id}/client.manage`, grantOptions(true));
+  for (const key of ['admin', 'clientManager']) {
+    assert.deepEqual(await expectStatus(200, '/clients?q=CLIENT', as(key)), { items: [summary], nextCursor: null });
+    assert.deepEqual(await expectStatus(200, path, as(key)), detail);
+    for (const target of ['admin', 'coach', 'missingProfile']) {
+      const denied = await expectStatus(404, '/clients/' + users[target].id, as(key));
+      assert.equal(denied.code, 'CLIENT_NOT_FOUND');
+    }
+  }
+  await expectStatus(204, `/staff-grants/${users.clientManager.id}/client.manage`, grantOptions(false));
+  await expectStatus(403, '/clients', as('clientManager'));
+  await expectStatus(400, '/clients/not-an-id', as('admin'));
+  await expectStatus(400, path + '?q=client', as('admin'));
+});
+
+test('Client directory uses scoped cursors and literal prefix search with strict filters', async () => {
+  const admin = { access: sessions.admin.accessToken };
+  const expected = ['client', 'other', 'invited', 'pending', 'disabled', 'unverified'].map(key => users[key].id).sort().reverse();
+  const seen = [];
+  let after;
+  do {
+    const query = new URLSearchParams({ limit: '2', ...(after ? { after } : {}) });
+    const page = await expectStatus(200, '/clients?' + query, admin);
+    assert.deepEqual(Object.keys(page).sort(), ['items', 'nextCursor']);
+    assert.equal(page.items.length, 2);
+    seen.push(...page.items.map(item => item.id));
+    if (page.nextCursor) assert.match(page.nextCursor, /^[A-Za-z0-9_-]{48}$/);
+    assert.ok(seen.length <= expected.length);
+    after = page.nextCursor;
+  } while (after);
+  assert.deepEqual(seen, expected);
+  const { items } = await expectStatus(200, '/clients?q=%20OtHeR%40%20&accountState=ACTIVE&emailVerified=true', admin);
+  assert.deepEqual(items.map(item => item.id), [users.other.id]);
+  const pending = await expectStatus(200, '/clients?q=PEN&accountState=PENDING_VERIFICATION&emailVerified=false', admin);
+  assert.deepEqual(pending.items.map(item => item.id), [users.pending.id]);
+  for (const q of ['tHer', 'other_', '%', '\\', 'coach', 'missingprofile', 'admin']) {
+    assert.deepEqual(await expectStatus(200, '/clients?' + new URLSearchParams({ q }), admin), { items: [], nextCursor: null });
+  }
+  for (const query of ['limit=0', 'limit=101', 'limit=1.0', 'limit=1&limit=2', 'limit=1e1', 'after=bogus',
+    'q=', 'q=%00', 'q=' + 'x'.repeat(121), 'q=x&q=y', 'accountState=active', 'emailVerified=1', 'emailVerified=FALSE',
+    'emailVerified=true&emailVerified=false', 'role=ADMIN']) {
+    assert.equal((await expectStatus(400, '/clients?' + query, admin)).code, 'INVALID_INPUT');
+  }
+  const cursorFor = id => Buffer.from(id).toString('base64url');
+  for (const id of [users.coach.id, users.missingProfile.id, randomUUID(), 'x'.repeat(36)]) {
+    assert.equal((await expectStatus(400, '/clients?after=' + cursorFor(id), admin)).code, 'INVALID_CLIENT_CURSOR');
+  }
+  assert.equal((await expectStatus(400, '/clients?accountState=DISABLED&after=' + cursorFor(users.client.id), admin)).code,
+    'INVALID_CLIENT_CURSOR');
 });
 
 test('client and coach cannot access another account; staff grants remain independent and invitations cannot set roles', async () => {

@@ -49,6 +49,20 @@ Use strict DTOs, decimal strings with currency, UTC instants and separate busine
 
 Use `Idempotency-Key` for all catalog writes. List responses use `items` and `nextCursor`. Pass `nextCursor` as `after` for the next page. The dashboard relays the listed methods and routes with the session bearer credential. Catalog writes require trusted Origin and session-bound CSRF, and the relay forwards bounded JSON and the idempotency key.
 
+## Implemented Client reads
+
+| Method and route | Access and response |
+|---|---|
+| GET `/clients` | Admin or Staff with `client.manage`. Returns `{ items, nextCursor }`. Items contain `id`, `displayName`, `email`, `accountState`, `emailVerified`, and `createdAt`. |
+| GET `/clients/{id}` | Same management authority. Returns the directory item plus nullable `emailVerifiedAt`. |
+| GET `/me/client-profile` | Authenticated Client only. Returns `id`, `displayName`, and `email` for the session owner. |
+
+All three require both a Client-role user and a matching Client profile. Missing authority returns `403`. A missing or out-of-scope profile returns `404 CLIENT_NOT_FOUND`. The profile's creation timestamp is returned as `createdAt`.
+
+The directory accepts integer `limit` (default 20, maximum 100), opaque `after`, optional `q` (trimmed, 1–120 characters, case-insensitive literal name or email prefix), `accountState`, and `emailVerified` (`true` or `false`). Results are newest profile first, with descending ID as the tie-breaker. Use the returned `nextCursor` with the same filters. Restart from the first page if the cursor is no longer in scope. Both detail routes accept no query parameters.
+
+The dashboard relays these three GET routes with the current session bearer and sends no-store responses. The directory and detail pages require successful API authorization. Slice 1 covers reads. Onboarding remains gated by O-02.
+
 ## Write retries
 
 A retryable command accepts an idempotency key. Scope it to actor and canonical operation, with a digest of normalized command input including target IDs. A successful command commits its replay outcome, state, audit, and outbox together. Recheck current authorization and resource scope before returning a recorded outcome. Same key and digest replays the committed success. A changed digest yields 409 IDEMPOTENCY_KEY_REUSED. A rollback stores no successful outcome. For a timeout or documented transient lock failure, retry with the same key and input. Do not retry a business conflict blindly. Domain posting keys outlive HTTP retry records. See [shared command transaction](business-rules.md#shared-command-transaction).

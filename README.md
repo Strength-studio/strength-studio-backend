@@ -1,6 +1,6 @@
 # Strength Studio
 
-Foundation and the public package catalog for the single-studio management platform. The workspace contains a NestJS API and a Next.js catalog dashboard. The Flutter directory records the mobile contract for its later interface milestone.
+Foundation, public package catalog, and read-only Client Management for the single-studio management platform. The workspace contains a NestJS API and a Next.js operations dashboard. The Flutter directory records the mobile contract for its later interface milestone.
 
 ## Local setup
 
@@ -42,6 +42,8 @@ unset LOCAL_ADMIN_PASSWORD LOCAL_ADMIN_EMAIL
 
 With the API running against a database that already has the catalog schema, start the dashboard with `pnpm dev:dashboard`. Open [the local dashboard](http://localhost:3001), matching `DASHBOARD_ORIGIN` in `.env`. Set `API_BASE_URL` to the API origin and configure `DASHBOARD_CSRF_KEY`. Sign in as Admin to manage packages and session types. Staff need explicit catalog grants. A manager also needs `catalog.read` to choose active session types, and `audit.read` to see package audit events.
 
+Admin and Staff with `client.manage` can open the Client directory at `/clients` and view individual profiles. Authenticated Clients can read their own profile through the API. These features use existing Client records and require no schema changes. See the [Client read contract](docs/api-contract.md#implemented-client-reads). Registration, invitation, and account setup remain gated by O-02.
+
 ## Verification
 
 ```sh
@@ -51,7 +53,7 @@ pnpm openapi
 
 The unit suite needs no database. The integration suite uses the documented loopback connection strings to create and migrate an isolated temporary PostgreSQL database. It drops only that database on exit. It exercises real NestJS routes, Socket.IO, DB-role denial, and the built Next.js session routes. The migrator needs permission to create and drop the disposable test database. Both application builds are prerequisites. A GitHub Actions workflow is available if the repository is hosted there.
 
-To test the catalog dashboard without applying migrations, build both apps with `pnpm build`, stop services connected to the local `strength_studio` database, then run:
+To test the catalog and Client dashboard without applying migrations, build both apps with `pnpm build`, stop services connected to the local `strength_studio` database, then run:
 
 ```sh
 node --env-file=.env --test apps/dashboard/test/catalog.integration.test.cjs

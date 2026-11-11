@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
+import { clientQuery, clientRoute, readClientRoute } from '../../../../../lib/client-relay';
 import { accessCookie, api, refreshCookie, reply, trustedOrigin, validCsrf } from '../../../../../lib/session';
 
 type Route = { params: Promise<{ path: string[] }> };
@@ -9,7 +10,8 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
   const legacy = method === 'GET' && parts.length === 1 && parts[0] === 'me' ? 'me'
     : method === 'POST' && parts.length === 2 && parts[0] === 'auth' && parts[1] === 'socket-ticket' ? 'auth/socket-ticket' : null;
   const catalog = catalogRoute(method, parts);
-  if (!legacy && !catalog) return reply({ code: 'NOT_FOUND' }, 404);
+  const client = clientRoute(method, parts);
+  if (!legacy && !catalog && !client) return reply({ code: 'NOT_FOUND' }, 404);
   const token = request.cookies.get(accessCookie)?.value;
   if (!token) return reply({ code: 'UNAUTHENTICATED' }, 401);
   try {
@@ -23,6 +25,12 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
       const body = await result.json();
       return reply(legacy === 'me' ? { id: body.id, email: body.email, role: body.role }
         : { ticket: body.ticket, expiresAt: body.expiresAt });
+    }
+    if (client) {
+      const query = clientQuery(client, request.nextUrl.searchParams);
+      if (!query) return reply({ code: 'INVALID_INPUT' }, 400);
+      const result = await readClientRoute(client, parts.join('/'), token, query);
+      return result.ok ? reply(result.data) : reply(result.error, result.status);
     }
     if (!catalog) return reply({ code: 'NOT_FOUND' }, 404);
     const query = catalogQuery(catalog, request.nextUrl.searchParams);

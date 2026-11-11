@@ -1057,11 +1057,193 @@
           "Public catalog"
         ]
       }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "description": "Requires client.manage.",
+        "operationId": "ClientController_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "description": "Opaque nextCursor from the preceding page",
+            "schema": {
+              "minLength": 48,
+              "maxLength": 48,
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive name or email prefix",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 120,
+              "type": "string"
+            }
+          },
+          {
+            "name": "accountState",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "INVITED",
+                "PENDING_VERIFICATION",
+                "ACTIVE",
+                "DISABLED"
+              ]
+            }
+          },
+          {
+            "name": "emailVerified",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List Client profiles",
+        "tags": [
+          "Clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{id}": {
+      "get": {
+        "description": "Requires client.manage.",
+        "operationId": "ClientController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDetailDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Client ID or unexpected query parameters"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read a Client profile for management",
+        "tags": [
+          "Clients"
+        ]
+      }
+    },
+    "/api/v1/me/client-profile": {
+      "get": {
+        "description": "Requires an authenticated Client account.",
+        "operationId": "ClientController_ownProfile",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientSelfProfileDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unexpected query parameters"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read your Client profile",
+        "tags": [
+          "Clients"
+        ]
+      }
     }
   },
   "info": {
     "title": "Strength Studio API",
-    "description": "Strength Studio Foundation and public catalog",
+    "description": "Strength Studio Foundation, public catalog, and Client directory",
     "version": "1",
     "contact": {}
   },
@@ -1441,6 +1623,132 @@
             "maxLength": 240
           }
         }
+      },
+      "ClientDirectoryItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "accountState": {
+            "type": "string",
+            "enum": [
+              "INVITED",
+              "PENDING_VERIFICATION",
+              "ACTIVE",
+              "DISABLED"
+            ]
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "email",
+          "accountState",
+          "emailVerified",
+          "createdAt"
+        ]
+      },
+      "ClientPageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientDirectoryItemDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ClientDetailDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "accountState": {
+            "type": "string",
+            "enum": [
+              "INVITED",
+              "PENDING_VERIFICATION",
+              "ACTIVE",
+              "DISABLED"
+            ]
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "emailVerifiedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "email",
+          "accountState",
+          "emailVerified",
+          "createdAt",
+          "emailVerifiedAt"
+        ]
+      },
+      "ClientSelfProfileDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "email"
+        ]
       }
     }
   }
