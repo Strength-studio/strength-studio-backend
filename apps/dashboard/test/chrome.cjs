@@ -18,7 +18,7 @@ async function waitFor(check, label) {
   throw new Error('Timed out waiting for ' + label, { cause: lastError });
 }
 
-async function withChrome(origin, run) {
+async function withChrome(origin, clientMarker, run) {
   if (!globalThis.WebSocket) throw new Error('Run the browser tests with node --experimental-websocket');
   const profile = await mkdtemp(join(tmpdir(), 'studio-chrome-'));
   const chrome = spawn(process.env.STUDIO_TEST_CHROME, [
@@ -41,10 +41,26 @@ async function withChrome(origin, run) {
     let sequence = 0;
     const pending = new Map();
     const browserErrors = [];
+    const lifecycle = [];
+    const responses = [];
+    const memoryCache = new Set();
+    const cacheMisses = [];
     socket.addEventListener('message', event => {
       const { id, result, error, method, params } = JSON.parse(event.data);
       if (method === 'Runtime.exceptionThrown') {
         browserErrors.push(params.exceptionDetails.exception?.description ?? params.exceptionDetails.text);
+      }
+      if (method === 'Runtime.bindingCalled' && params.name === 'reportStudioHistory') {
+        lifecycle.push(JSON.parse(params.payload));
+      }
+      if (method === 'Network.requestServedFromCache') memoryCache.add(params.requestId);
+      if (method === 'Network.responseReceived' && ['Document', 'Fetch'].includes(params.type)) {
+        const { url, status, fromDiskCache, fromServiceWorker, fromPrefetchCache } = params.response;
+        const cached = Boolean(fromDiskCache || fromServiceWorker || fromPrefetchCache || memoryCache.has(params.requestId));
+        responses.push({ url, status, cached, type: params.type });
+      }
+      if (method === 'Page.backForwardCacheNotUsed') {
+        cacheMisses.push(params.notRestoredExplanations.map(({ reason }) => reason));
       }
       const call = pending.get(id);
       if (!call) return;
@@ -70,9 +86,45 @@ async function withChrome(origin, run) {
       return result.result.value;
     }
 
-    await call('Runtime.enable');
+    await Promise.all([call('Runtime.enable'), call('Page.enable'), call('Network.enable')]);
+    await call('Runtime.addBinding', { name: 'reportStudioHistory' });
+    await call('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+      const marker = ${JSON.stringify(clientMarker)};
+      const documentId = String(performance.timeOrigin);
+      let previousVisibility = false;
+      function sample(event, persisted = null) {
+        const workspace = document.querySelector('.workspace-content');
+        const visible = Boolean(workspace && getComputedStyle(workspace).visibility === 'visible'
+          && workspace.getClientRects().length && workspace.innerText.includes(marker));
+        if (event !== 'visibility' || visible !== previousVisibility) {
+          reportStudioHistory(JSON.stringify({ event, persisted, visible, documentId, url: location.href,
+            navigation: performance.getEntriesByType('navigation')[0]?.type }));
+        }
+        previousVisibility = visible;
+      }
+      function sampleFrame() {
+        sample('visibility');
+        requestAnimationFrame(sampleFrame);
+      }
+      // Capture the restored snapshot before the application's pageshow handler can reload it.
+      addEventListener('pageshow', event => sample('pageshow', event.persisted), true);
+      addEventListener('pagehide', event => sample('pagehide', event.persisted), true);
+      addEventListener('popstate', () => sample('popstate'), true);
+      new MutationObserver(() => sample('visibility')).observe(document, {
+        subtree: true, childList: true, attributes: true, characterData: true,
+      });
+      requestAnimationFrame(sampleFrame);
+    })()` });
     await run({
       go: path => call('Page.navigate', { url: origin + path }),
+      blockResources: urls => call('Network.setBlockedURLs', { urls }),
+      traverse: async offset => {
+        const { currentIndex, entries } = await call('Page.getNavigationHistory');
+        await call('Page.navigateToHistoryEntry', { entryId: entries[currentIndex + offset].id });
+      },
+      lifecycle,
+      responses,
+      cacheMisses,
       evaluate,
       until: async (expression, label) => {
         try {

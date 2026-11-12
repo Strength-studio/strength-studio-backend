@@ -298,72 +298,181 @@ async function browserSignIn(browser, name) {
     document.querySelector('.account').textContent.includes(${JSON.stringify(email(name))})`, 'signed-in dashboard');
 }
 
-async function openClientDirectory(browser) {
-  await browser.go('/');
-  await browserSignIn(browser, 'clientManager');
-  await browser.until(`document.querySelector('nav a[href="/clients"]')`, 'Client navigation');
-  await browser.evaluate(`document.querySelector('nav a[href="/clients"]').click(); true`);
-  await browser.until(`document.body.innerText.includes(${JSON.stringify(clientName('client'))})`, 'authorized directory');
-}
+const signedOut = 'document.querySelector("form [name=email]")';
+const signOutButton = `document.querySelector('[aria-label="Sign out"]')`;
+const clientVisible = `document.querySelector('.workspace-content')?.innerText.includes(${JSON.stringify(email('client'))})`;
 
 async function browserSignOut(browser) {
-  await browser.until(`document.querySelector('[aria-label="Sign out"]')`, 'sign-out button');
-  await browser.evaluate(`document.querySelector('[aria-label="Sign out"]').click(); true`);
-  await browser.until(`document.querySelector('form [name=email]') &&
-    fetch('/api/studio/v1/me').then(response => response.status === 401)`, 'signed-out dashboard');
+  const documentId = await browser.evaluate('performance.timeOrigin');
+  await browser.until(signOutButton, 'sign-out button');
+  await browser.evaluate(`${signOutButton}.click(); true`);
+  await browser.until(`performance.timeOrigin !== ${documentId} && ${signedOut}`, 'signed-out dashboard reload');
+  assert.equal(await browser.evaluate(`fetch('/api/studio/v1/me').then(response => response.status)`), 401);
 }
 
-async function assertClientHistoryDenied(browser, path, status) {
-  await browser.evaluate('history.back(); true');
-  const message = status === 401 ? 'Sign in to continue.' : 'Your account does not have access to Client Management.';
-  await browser.until(`location.pathname === ${JSON.stringify(path)} &&
-    document.body.innerText.includes(${JSON.stringify(message)})`, 'protected history entry');
-  const text = await browser.evaluate('document.body.innerText');
-  assert(!text.includes(userPrefix), 'Previous Client records must not appear in the restored page');
-  assert.equal(await browser.evaluate(`fetch('/api/studio/v1/clients').then(response => response.status)`), status);
+async function openClientPage(browser, { detail, linked, unhydrated } = {}) {
+  await browser.go('/');
+  await browserSignIn(browser, 'clientManager');
+  const path = detail
+    ? '/clients/' + (await relay(await signIn('client'), 200, 'me/client-profile')).id
+    : '/clients';
+  if (unhydrated) await browser.blockResources(['*/_next/static/chunks/*.js']);
+  try {
+    if (linked) {
+      await browser.until(`document.querySelector('nav a[href="/clients"]')`, 'Client navigation');
+      await browser.evaluate(`document.querySelector('nav a[href="/clients"]').click(); true`);
+    } else {
+      await browser.go(path);
+    }
+    await browser.until(`location.pathname === ${JSON.stringify(path)} && document.readyState === 'complete'
+      && (${clientVisible})`, 'authorized Client page');
+  } finally {
+    if (unhydrated) await browser.blockResources([]);
+  }
+  return path;
 }
 
-test('Client browser history hides the directory after logout', browserTest, async () => {
-  await withChrome(origin, async browser => {
-    await openClientDirectory(browser);
-    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
-    await browserSignOut(browser);
-    await assertClientHistoryDenied(browser, '/clients', 401);
+function historyObservation(browser) {
+  const lifecycle = browser.lifecycle.length;
+  const responses = browser.responses.length;
+  const cacheMisses = browser.cacheMisses.length;
+  return () => ({
+    lifecycle: browser.lifecycle.slice(lifecycle),
+    responses: browser.responses.slice(responses),
+    cacheMisses: browser.cacheMisses.slice(cacheMisses),
   });
-});
+}
 
-test('Client browser history hides the directory after an account switch', browserTest, async () => {
-  await withChrome(origin, async browser => {
-    await openClientDirectory(browser);
-    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
-    await browserSignOut(browser);
-    await browserSignIn(browser, 'noGrant');
-    await assertClientHistoryDenied(browser, '/clients', 403);
+async function traverseHistory(t, browser, direction, path, outcome, { denied = false, fresh = false } = {}) {
+  const observe = historyObservation(browser);
+  const documentId = await browser.evaluate('String(performance.timeOrigin)');
+  await browser.traverse(direction === 'Back' ? -1 : 1);
+  try {
+    await browser.until(`location.pathname === ${JSON.stringify(path)} && document.readyState === 'complete'
+      && getComputedStyle(document.documentElement).visibility === 'visible' && (${outcome})`, direction + ' to ' + path);
+  } catch (error) {
+    t.diagnostic(JSON.stringify(observe()));
+    throw error;
+  }
+  // Give the document an opportunity to paint and deliver its pageshow and CDP response events.
+  await browser.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
+  const evidence = observe();
+  const destinationEvents = evidence.lifecycle.filter(event => new URL(event.url).pathname === path);
+  const pageshows = destinationEvents.filter(event => event.event === 'pageshow');
+  const persisted = pageshows.some(event => event.persisted);
+  const sameDocument = (await browser.evaluate('String(performance.timeOrigin)')) === documentId;
+  const freshResponses = evidence.responses.filter(response =>
+    new URL(response.url).pathname === path && response.status === 200 && !response.cached).map(response => response.type);
+  const clientWasVisible = evidence.lifecycle.some(event => event.event !== 'pagehide' && event.visible);
+  t.diagnostic(JSON.stringify({
+    direction, path, kind: persisted ? 'BFCache' : sameDocument ? 'same-document' : 'document navigation',
+    pageshows, freshResponses, cacheMisses: evidence.cacheMisses, clientWasVisible,
+  }));
+  if (!sameDocument) assert(pageshows.length, 'Expected a real pageshow on the destination document');
+  if (denied) {
+    assert(!clientWasVisible, 'Client fixture data became visible during history traversal');
+    assert.equal(await browser.evaluate(`Boolean(${clientVisible})`), false);
+  }
+  if (path.startsWith('/clients') && persisted) {
+    assert(pageshows.filter(event => event.persisted).every(event => !event.visible),
+      'The protected snapshot must already be concealed on pageshow');
+    assert(freshResponses.includes('Document'), 'A restored Client document must revalidate with the server');
+  }
+  if (fresh) assert(freshResponses.length, 'Expected a fresh server response');
+  return { persisted, freshResponses };
+}
+
+const signInRequired = 'Sign in to continue.';
+const forbidden = 'Your account does not have access to Client Management.';
+const alertIs = message => `document.querySelector('[role="alert"]')?.textContent === ${JSON.stringify(message)}`;
+
+for (const { title, detail, switchAccount, linked } of [
+  { title: 'directory after logout' },
+  { title: 'directory after an account switch', switchAccount: true },
+  { title: 'directly loaded detail after logout', detail: true },
+  { title: 'linked directory after logout', linked: true },
+  { title: 'linked directory after an account switch', linked: true, switchAccount: true },
+]) {
+  test('Client browser history protects the ' + title, browserTest, async t => {
+    await withChrome(origin, userPrefix, async browser => {
+      const path = await openClientPage(browser, { detail, linked });
+      if (linked) {
+        await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
+      } else {
+        await browser.go('/');
+      }
+      await browserSignOut(browser);
+      if (switchAccount) await browserSignIn(browser, 'noGrant');
+      const outcome = alertIs(switchAccount ? forbidden : signInRequired);
+      const landing = switchAccount
+        ? `document.querySelector('.account')?.textContent.includes(${JSON.stringify(email('noGrant'))})`
+        : signedOut;
+      await traverseHistory(t, browser, 'Back', path, outcome, { denied: true, fresh: true });
+      await traverseHistory(t, browser, 'Forward', '/', landing, { denied: true });
+    });
   });
-});
+}
 
-test('Client browser history protects a directly loaded detail document', browserTest, async () => {
-  await withChrome(origin, async browser => {
-    await openClientDirectory(browser);
-    const path = await browser.evaluate(`Array.from(document.querySelectorAll('tbody a')).find(
-      link => link.textContent.trim() === ${JSON.stringify(clientName('client'))}).pathname`);
-    await browser.go(path);
-    await browser.until(`document.body.innerText.includes('Account details') &&
-      document.body.innerText.includes(${JSON.stringify(email('client'))})`, 'direct Client detail');
-    // Exercise the persisted lifecycle even when Chrome evicts snapshots on cookie changes.
-    await browser.until(`(() => {
-      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
-      return getComputedStyle(document.querySelector('.workspace')).visibility === 'hidden';
-    })()`, 'concealed history snapshot');
-    await browser.evaluate(`window.previousClientDocument = true;
-      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })); true`);
-    await browser.until(`!window.previousClientDocument && document.body.innerText.includes('Account details')`,
-      'detail reloaded after a persisted restore');
+test('Client browser history preserves authorized Catalog, directory, and detail navigation', browserTest, async t => {
+  await withChrome(origin, userPrefix, async browser => {
     await browser.go('/');
-    await browserSignOut(browser);
-    await assertClientHistoryDenied(browser, path, 401);
+    await browserSignIn(browser, 'clientManager');
+    await browser.until(`document.querySelector('nav a[href="/clients"]')`, 'Client navigation');
+    const documentId = await browser.evaluate('performance.timeOrigin');
+    await browser.evaluate(`document.querySelector('nav a[href="/clients"]').click(); true`);
+    await browser.until(clientVisible, 'linked Client directory');
+    assert.equal(await browser.evaluate('performance.timeOrigin'), documentId, 'Expected a Next.js route transition');
+    const detailPath = await browser.evaluate(`[...document.querySelectorAll('tbody a')].find(
+      link => link.textContent.trim() === ${JSON.stringify(clientName('client'))}).pathname`);
+    await browser.evaluate(`document.querySelector('a[href="' + ${JSON.stringify(detailPath)} + '"]').click(); true`);
+    await browser.until(`location.pathname === ${JSON.stringify(detailPath)} && (${clientVisible})`, 'linked Client detail');
+    assert.equal(await browser.evaluate('performance.timeOrigin'), documentId, 'Expected a Next.js route transition');
+    await traverseHistory(t, browser, 'Back', '/clients', clientVisible);
+    await traverseHistory(t, browser, 'Forward', detailPath, clientVisible);
+
+    await browser.go('/');
+    await browser.until(signOutButton, 'authorized Catalog document');
+    await traverseHistory(t, browser, 'Back', detailPath, clientVisible);
+    await traverseHistory(t, browser, 'Forward', '/', signOutButton);
+
+    await traverseHistory(t, browser, 'Back', detailPath, clientVisible);
+    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
+    await browser.until(signOutButton, 'Catalog after leaving the Client workspace');
+    assert.equal(await browser.evaluate("document.documentElement.hasAttribute('data-client-history')"), true);
+    await browser.go('/clients');
+    await browser.until(`location.pathname === '/clients' && document.readyState === 'complete'
+      && (${clientVisible})`, 'separate Client directory document');
+    const { persisted, freshResponses } = await traverseHistory(t, browser, 'Back', '/', signOutButton);
+    if (persisted) assert(freshResponses.includes('Document'), 'Catalog must discard restored Client route data');
   });
 });
+
+for (const direction of ['Back', 'Forward']) {
+  const detail = direction === 'Back';
+  test(`Client browser history revalidates the ${detail ? 'detail' : 'directory'} on ${direction} after grant revocation`, browserTest, async t => {
+    await withChrome(origin, userPrefix, async browser => {
+      const path = await openClientPage(browser, { detail, unhydrated: true });
+      assert.equal(await browser.evaluate("document.documentElement.hasAttribute('data-client-history')"), false,
+        'The protected document must still be unhydrated');
+      if (detail) {
+        await browser.go('/');
+        await browser.until(signOutButton, 'authorized Catalog document');
+      } else {
+        await traverseHistory(t, browser, 'Back', '/', signOutButton);
+      }
+      // Leave browser cookies intact so Chrome can restore the protected document from BFCache.
+      const { id } = await relay(await signIn('clientManager'), 200, 'me');
+      const key = { staffUserId_permission: { staffUserId: id, permission: 'CLIENT_MANAGE' } };
+      const grant = await fixture.staffGrant.delete({ where: key });
+      try {
+        await traverseHistory(t, browser, direction, path, alertIs(forbidden), { denied: true, fresh: true });
+        await traverseHistory(t, browser, detail ? 'Forward' : 'Back', '/', signOutButton, { denied: true });
+      } finally {
+        await fixture.staffGrant.create({ data: grant });
+      }
+    });
+  });
+}
 
 test('real catalog commands preserve roles, history and conflict codes through the dashboard relay', async () => {
   const actors = [];
