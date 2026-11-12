@@ -19,6 +19,8 @@ import { CONFIG, Config } from './platform/config';
 import { Database } from './platform/database';
 import { HealthController } from './platform/health.controller';
 import { ErrorFilter, requestContext } from './platform/http';
+import { ComplimentaryController } from './purchases/complimentary.controller';
+import { ComplimentaryService } from './purchases/complimentary.service';
 import { StudioController } from './studio/studio.controller';
 
 @Module({})
@@ -29,10 +31,10 @@ export async function createApp(config: Config) {
     module: AppModule,
     imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
     controllers: [HealthController, AuthController, AccountsController, StudioController, DeferredController, CatalogController,
-      ClientController],
+      ClientController, ComplimentaryController],
     providers: [
       { provide: CONFIG, useValue: config },
-      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService,
+      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService, ComplimentaryService,
       { provide: APP_GUARD, useClass: ThrottlerGuard },
       { provide: APP_GUARD, useClass: AccessGuard },
     ],

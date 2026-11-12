@@ -415,6 +415,223 @@ test('zero-price publication and session-type retirement enforce catalog authori
   assert.equal((await expectStatus(200, version, client)).price, '0.00');
 });
 
+const complimentaryPath = '/purchases/complimentary';
+const complimentaryOperation = 'purchase.accept-complimentary';
+const acceptanceAction = 'PURCHASE_ACCEPTED_RECORDED';
+
+function adminWrite(body) {
+  return { method: 'POST', key: randomUUID(), access: sessions.admin.accessToken, body };
+}
+
+async function acceptanceOffer(price = '0.00') {
+  const suffix = randomBytes(5).toString('hex');
+  const { sessionTypeId } = await expectStatus(201, '/session-types', adminWrite({
+    code: 'ACCEPT-TYPE-' + suffix, name: 'Complimentary introduction', mode: 'INDIVIDUAL',
+  }));
+  const terms = {
+    name: 'Complimentary package', description: 'The accepted terms', price, kind: 'SESSION',
+    validityDays: 14, sessionAllowance: 2, sessionTypeIds: [sessionTypeId],
+  };
+  const { packageId } = await expectStatus(201, '/packages', adminWrite({ code: 'ACCEPT-' + suffix, ...terms }));
+  const path = '/packages/' + packageId;
+  const { items: [draft] } = await expectStatus(200, path + '/management', { access: sessions.admin.accessToken });
+  await expectStatus(204, path + '/versions/' + draft.id + '/publish',
+    adminWrite({ expectedDraftRevision: 1, expectedCurrentVersionId: null }));
+  return { packageId, packageVersionId: draft.id, path, terms, sessionTypeId };
+}
+
+function acceptanceRequest(offer, overrides = {}) {
+  return adminWrite({
+    clientId: users.client.id, packageId: offer.packageId, packageVersionId: offer.packageVersionId,
+    agreementMethod: 'SIGNED_AGREEMENT', agreementEvidence: 'Agreement reference: acceptance fixture 1',
+    purpose: 'Private purpose: welcome appointment', ...overrides,
+  });
+}
+
+async function acceptanceCounts() {
+  return Promise.all([
+    migrator.complimentaryAcceptance.count(),
+    migrator.membership.count(),
+    migrator.auditLog.count({ where: { action: acceptanceAction } }),
+    migrator.idempotencyKey.count({ where: { operation: complimentaryOperation } }),
+  ]);
+}
+
+test('Admin records exact complimentary terms and one pending membership without financial effects', async () => {
+  const offer = await acceptanceOffer();
+  const write = acceptanceRequest(offer);
+  const versionPath = offer.path + '/versions/' + offer.packageVersionId;
+  const publicReader = { access: sessions.client.accessToken };
+  const originalPublicVersion = await expectStatus(200, versionPath, publicReader);
+  const before = await acceptanceCounts();
+  const issued = await expectStatus(201, complimentaryPath, write);
+  assert.deepEqual(await expectStatus(201, complimentaryPath, write), issued);
+  assert.equal((await expectStatus(409, complimentaryPath, { ...write, key: randomUUID() })).code,
+    'COMPLIMENTARY_ACCEPTANCE_EXISTS');
+  assert.equal((await expectStatus(409, complimentaryPath, { ...write, body: { ...write.body, purpose: 'Changed' } })).code,
+    'IDEMPOTENCY_KEY_REUSED');
+  assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
+
+  const acceptance = await migrator.complimentaryAcceptance.findUniqueOrThrow({
+    where: { id: issued.acceptanceId },
+    include: { membership: true, packageVersion: { include: { eligibility: true } } },
+  });
+  const { packageVersion, membership } = acceptance;
+  assert.deepEqual(issued, { acceptanceId: acceptance.id, membershipId: membership.id, status: 'PENDING_ACTIVATION' });
+  assert.equal(membership.status, 'PENDING_ACTIVATION');
+  assert.equal((await expectStatus(409, '/memberships/' + membership.id + '/activate', adminWrite())).code, 'WORKFLOW_NOT_ENABLED');
+  assert.equal(acceptance.clientId, users.client.id);
+  assert.equal(acceptance.acceptedById, users.admin.id);
+  assert.equal(acceptance.acceptedAt.valueOf(), membership.createdAt.valueOf());
+  assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
+  assert.equal(acceptance.agreementEvidence, write.body.agreementEvidence);
+  assert.equal(acceptance.purpose, write.body.purpose);
+  assert.equal(packageVersion.id, offer.packageVersionId);
+  assert.equal(packageVersion.packageId, offer.packageId);
+  assert.equal(packageVersion.currency, 'SAR');
+  assert.deepEqual({
+    name: packageVersion.name, description: packageVersion.description, price: packageVersion.price.toFixed(2),
+    kind: packageVersion.kind, validityDays: packageVersion.validityDays, sessionAllowance: packageVersion.sessionAllowance,
+    sessionTypeIds: packageVersion.eligibility.map(link => link.sessionTypeId),
+  }, offer.terms);
+  const audit = await migrator.auditLog.findFirstOrThrow({ where: { action: acceptanceAction, targetId: acceptance.id } });
+  assert.equal(audit.targetType, 'COMPLIMENTARY_ACCEPTANCE');
+  assert.equal(audit.actorId, users.admin.id);
+  assert(audit.requestId);
+  assert.deepEqual(audit.redactedDetails, { agreementMethod: write.body.agreementMethod, packageVersionId: offer.packageVersionId });
+  const retry = await migrator.idempotencyKey.findFirstOrThrow({ where: { key: write.key, operation: complimentaryOperation } });
+  assert.equal(retry.resultStatus, 201);
+  assert.equal(retry.resultReference, acceptance.id);
+  assert.deepEqual(await migrator.$queryRaw`
+    SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
+      AND table_name IN ('finance_account', 'payment', 'allocation', 'payment_allocation', 'receivable',
+        'finance_event', 'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
+  await assert.rejects(runtime.$executeRaw`UPDATE complimentary_acceptance SET purpose = 'Changed' WHERE id = ${acceptance.id}::uuid`,
+    error => error.meta?.code === '42501');
+  await assert.rejects(runtime.$executeRaw`DELETE FROM membership WHERE id = ${membership.id}::uuid`,
+    error => error.meta?.code === '42501');
+
+  const publicVersion = await expectStatus(200, versionPath, publicReader);
+  assert.deepEqual(publicVersion, originalPublicVersion);
+  for (const privateValue of [acceptance.id, membership.id, acceptance.clientId, acceptance.agreementEvidence, acceptance.purpose]) {
+    assert(!JSON.stringify(publicVersion).includes(privateValue));
+  }
+  await expectStatus(204, offer.path + '/archive', adminWrite({ expectedCurrentVersionId: offer.packageVersionId }));
+  assert.deepEqual(await expectStatus(201, complimentaryPath, write), issued);
+  assert.equal((await migrator.complimentaryAcceptance.findUniqueOrThrow({ where: { id: acceptance.id } })).packageVersionId,
+    offer.packageVersionId);
+  assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
+});
+
+test('complimentary acceptance rejects unauthorized actors and invalid agreement or catalog input', async () => {
+  const offer = await acceptanceOffer();
+  const paid = await acceptanceOffer('1.00');
+  const { versionId: successor } = await expectStatus(201, offer.path + '/versions', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, terms: null,
+  }));
+  const write = acceptanceRequest(offer);
+  const before = await acceptanceCounts();
+  await expectStatus(204, `/staff-grants/${users.staff.id}/purchase.record`, grantOptions(true));
+  for (const role of ['staff', 'coach', 'client']) {
+    await expectStatus(403, complimentaryPath, { ...write, access: sessions[role].accessToken });
+  }
+  await expectStatus(401, complimentaryPath, { ...write, access: undefined });
+  await expectStatus(400, complimentaryPath, { ...write, key: undefined });
+
+  for (const [status, code, overrides] of [
+    [404, 'CLIENT_NOT_FOUND', { clientId: randomUUID() }],
+    [404, 'CLIENT_NOT_FOUND', { clientId: users.missingProfile.id }],
+    [404, 'CLIENT_NOT_FOUND', { clientId: users.coach.id }],
+    [404, 'CATALOG_VERSION_NOT_FOUND', { packageVersionId: randomUUID() }],
+    [404, 'CATALOG_VERSION_NOT_FOUND', { packageId: randomUUID() }],
+    [404, 'CATALOG_VERSION_NOT_FOUND', { packageVersionId: paid.packageVersionId }],
+    [409, 'CATALOG_VERSION_NOT_ELIGIBLE', { packageId: paid.packageId, packageVersionId: paid.packageVersionId }],
+    [409, 'CATALOG_VERSION_NOT_ELIGIBLE', { packageVersionId: successor }],
+    [400, 'INVALID_INPUT', { agreementEvidence: undefined }],
+    [400, 'INVALID_INPUT', { agreementEvidence: '  ' }],
+    [400, 'INVALID_INPUT', { agreementEvidence: true }],
+    [400, 'INVALID_INPUT', { agreementMethod: 'IN_APP_CONFIRMATION' }],
+    [400, 'INVALID_INPUT', { purpose: undefined }],
+    [400, 'INVALID_INPUT', { purpose: '  ' }],
+  ]) {
+    assert.equal((await expectStatus(status, complimentaryPath, acceptanceRequest(offer, overrides))).code, code);
+  }
+  await expectStatus(204, offer.path + '/versions/' + successor + '/publish', adminWrite({
+    expectedDraftRevision: 1, expectedCurrentVersionId: offer.packageVersionId,
+  }));
+  assert.equal((await expectStatus(409, complimentaryPath, write)).code, 'CATALOG_VERSION_NOT_ELIGIBLE');
+  await expectStatus(204, offer.path + '/archive', adminWrite({ expectedCurrentVersionId: successor }));
+  assert.equal((await expectStatus(409, complimentaryPath, acceptanceRequest(offer, { packageVersionId: successor }))).code,
+    'CATALOG_VERSION_NOT_ELIGIBLE');
+  assert.deepEqual(await acceptanceCounts(), before);
+});
+
+test('concurrent complimentary acceptance is unique under both identical and distinct keys', async () => {
+  const offer = await acceptanceOffer();
+  const before = await acceptanceCounts();
+  const write = acceptanceRequest(offer);
+  const replay = await Promise.all([
+    expectStatus(201, complimentaryPath, write), expectStatus(201, complimentaryPath, write),
+  ]);
+  assert.deepEqual(replay[0], replay[1]);
+  const responses = await Promise.all([0, 1].map(() =>
+    request(complimentaryPath, acceptanceRequest(offer, { clientId: users.other.id }))));
+  assert.deepEqual(responses.map(response => response.status).sort(), [201, 409]);
+  assert.equal((await responses.find(response => response.status === 409).json()).code, 'COMPLIMENTARY_ACCEPTANCE_EXISTS');
+  assert.deepEqual(await acceptanceCounts(), before.map(count => count + 2));
+});
+
+test('complimentary acceptance waiting behind Catalog archive rechecks eligibility', async () => {
+  const offer = await acceptanceOffer();
+  const before = await acceptanceCounts();
+  let archive, acceptance;
+  async function waitForLock(query) {
+    const deadline = Date.now() + 800;
+    while (Date.now() < deadline) {
+      const [row] = await owner.$queryRaw`SELECT EXISTS (
+        SELECT 1 FROM pg_stat_activity WHERE datname = ${databaseName} AND usename = 'studio_api'
+          AND wait_event_type = 'Lock' AND query LIKE ${query}
+      ) AS waiting`;
+      if (row.waiting) return;
+      await delay(15);
+    }
+    assert.fail('Expected a waiting Catalog row lock for ' + query);
+  }
+  await migrator.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM package WHERE id = ${offer.packageId}::uuid FOR NO KEY UPDATE`;
+    archive = request(offer.path + '/archive', adminWrite({ expectedCurrentVersionId: offer.packageVersionId }));
+    await waitForLock('%SELECT archived_at FROM package WHERE%FOR NO KEY UPDATE%');
+    acceptance = request(complimentaryPath, acceptanceRequest(offer));
+    await waitForLock('%SELECT archived_at FROM package WHERE%FOR SHARE%');
+  });
+  const [archived, denied] = await Promise.all([archive, acceptance]);
+  assert.equal(archived.status, 204);
+  assert.equal(denied.status, 409);
+  assert.equal((await denied.json()).code, 'CATALOG_VERSION_NOT_ELIGIBLE');
+  assert.deepEqual(await acceptanceCounts(), before);
+});
+
+test('a failed acceptance audit rolls back issuance and leaves its idempotency key reusable', async () => {
+  const offer = await acceptanceOffer();
+  const write = acceptanceRequest(offer, {
+    agreementMethod: 'VERBAL_AGREEMENT', agreementEvidence: 'Client agreed verbally to the selected terms.',
+  });
+  const before = await acceptanceCounts();
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_acceptance_audit
+    CHECK (action <> 'PURCHASE_ACCEPTED_RECORDED') NOT VALID`;
+  try {
+    assert.equal((await expectStatus(500, complimentaryPath, write)).code, 'INTERNAL_ERROR');
+    assert.deepEqual(await acceptanceCounts(), before);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_acceptance_audit`;
+  }
+  const issued = await expectStatus(201, complimentaryPath, write);
+  const acceptance = await migrator.complimentaryAcceptance.findUniqueOrThrow({ where: { id: issued.acceptanceId } });
+  assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
+  assert.equal(acceptance.agreementEvidence, write.body.agreementEvidence);
+  assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
+});
+
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
   const ticket = (await expectStatus(200, '/auth/socket-ticket', { method: 'POST', access: sessions.staff.accessToken })).ticket;
   const wrongOrigin = await fetch(base + '/socket.io/?EIO=4&transport=polling', { headers: { origin: 'https://untrusted.example' } });

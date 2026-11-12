@@ -1239,6 +1239,68 @@
           "Clients"
         ]
       }
+    },
+    "/api/v1/purchases/complimentary": {
+      "post": {
+        "description": "Admin only. Records agreement evidence and issues one membership pending activation.",
+        "operationId": "ComplimentaryController_accept",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptComplimentaryPackageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComplimentaryAcceptanceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Client or exact package version not found"
+          },
+          "409": {
+            "description": "Version is ineligible, acceptance already exists, or the idempotency key cannot be replayed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Accept a published SAR 0 version for an existing Client",
+        "tags": [
+          "Complimentary purchases"
+        ]
+      }
     }
   },
   "info": {
@@ -1748,6 +1810,74 @@
           "id",
           "displayName",
           "email"
+        ]
+      },
+      "AcceptComplimentaryPackageDto": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "packageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "packageVersionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agreementMethod": {
+            "type": "string",
+            "enum": [
+              "SIGNED_AGREEMENT",
+              "VERBAL_AGREEMENT"
+            ]
+          },
+          "agreementEvidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "Reference to a signed agreement or a supporting note for a verbal agreement, according to agreementMethod."
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "Purpose of complimentary issuance."
+          }
+        },
+        "required": [
+          "clientId",
+          "packageId",
+          "packageVersionId",
+          "agreementMethod",
+          "agreementEvidence",
+          "purpose"
+        ]
+      },
+      "ComplimentaryAcceptanceDto": {
+        "type": "object",
+        "properties": {
+          "acceptanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "membershipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING_ACTIVATION"
+            ]
+          }
+        },
+        "required": [
+          "acceptanceId",
+          "membershipId",
+          "status"
         ]
       }
     }
