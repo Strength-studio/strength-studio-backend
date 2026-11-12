@@ -360,7 +360,8 @@ model Purchase {
   acceptance        ComplimentaryAcceptance?
   membership        Membership?
 
-  @@unique([clientId, packageVersionId])
+  // A SQL partial unique index enforces one complimentary Purchase per Client and version.
+  @@index([clientId])
   @@index([packageVersionId])
   @@index([acceptedById])
   @@map("purchase")

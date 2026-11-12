@@ -494,6 +494,10 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
   assert.equal(purchase.clientId, users.client.id);
   assert.equal(purchase.packageVersionId, offer.packageVersionId);
   assert.equal(purchase.acceptedById, users.admin.id);
+  await assert.rejects(runtime.$executeRaw`
+    INSERT INTO purchase (client_id, package_version_id, type, accepted_by, accepted_at, terms)
+    SELECT client_id, package_version_id, type, accepted_by, accepted_at, terms
+    FROM purchase WHERE id = ${purchase.id}::uuid`, error => error.meta?.code === '23505');
   assert.deepEqual(purchase.acceptedAt, membership.createdAt);
   assert.deepEqual(purchase.createdAt, purchase.acceptedAt);
   assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
@@ -660,7 +664,7 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 });
 
-test('purchase migration backfills legacy acceptance and preserves historical replay', async () => {
+test('purchase migrations preserve historical replay and limit duplicate prevention to complimentary purchases', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'studio-purchase-upgrade-'));
   const legacySchema = join(scratch, 'schema.prisma');
   const { api, migration } = disposableUrls();
@@ -721,9 +725,16 @@ test('purchase migration backfills legacy acceptance and preserves historical re
       resultStatus: 201, resultReference: acceptanceId,
     } });
 
+    const purchaseMigration = '20261112000200_purchase_records';
+    cpSync(join(prismaDirectory, 'migrations', purchaseMigration), join(scratch, 'migrations', purchaseMigration), { recursive: true });
+    deployMigrations(api, migration, legacySchema);
+    const originalPurchase = await upgradeDb.purchase.findFirstOrThrow();
+
     deployMigrations(api, migration);
     deployMigrations(api, migration);
     const purchase = await upgradeDb.purchase.findFirstOrThrow({ include: { acceptance: true, membership: true } });
+    const { acceptance, membership, ...purchaseFields } = purchase;
+    assert.deepEqual(purchaseFields, originalPurchase);
     assert.equal(purchase.clientId, client.id);
     assert.equal(purchase.packageVersionId, version.id);
     assert.equal(purchase.type, 'COMPLIMENTARY');
@@ -754,6 +765,14 @@ test('purchase migration backfills legacy acceptance and preserves historical re
       upgradeDb.purchase.count(), upgradeDb.complimentaryAcceptance.count(), upgradeDb.membership.count(),
       upgradeDb.auditLog.count(), upgradeDb.idempotencyKey.count(),
     ]), [1, 1, 1, 1, 1]);
+
+    // Model a future type only in this disposable database.
+    await upgradeDb.$executeRaw`ALTER TYPE purchase_type ADD VALUE 'TEST_REPEATABLE'`;
+    const repeated = await upgradeDb.$executeRaw`
+      INSERT INTO purchase (client_id, package_version_id, type, accepted_by, accepted_at, terms)
+      SELECT client_id, package_version_id, 'TEST_REPEATABLE', accepted_by, accepted_at, terms
+      FROM purchase CROSS JOIN generate_series(1, 2) WHERE id = ${purchase.id}::uuid`;
+    assert.equal(repeated, 2);
   } finally {
     await upgradeApp?.close();
     await upgradeDb?.$disconnect();
