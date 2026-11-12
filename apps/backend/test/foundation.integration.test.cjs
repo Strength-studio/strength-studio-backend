@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { once } = require('node:events');
+const { cpSync, mkdirSync, mkdtempSync, rmSync } = require('node:fs');
 const { createServer } = require('node:net');
-const { resolve } = require('node:path');
+const { tmpdir } = require('node:os');
+const { join, resolve } = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { PrismaClient, Role, AccountState, TokenPurpose } = require('@prisma/client');
 const { io } = require('socket.io-client');
@@ -16,6 +18,7 @@ const { digest, Sessions } = require('../dist/identity/session.service.js');
 const password = 'integration-only fixture passphrase';
 const allowedOrigin = 'http://localhost:3001';
 const databaseName = `studio_test_${randomBytes(8).toString('hex')}`;
+const prismaDirectory = resolve(__dirname, '../prisma');
 let owner, migrator, runtime, app, base, users, sessions, created = false;
 
 function disposableUrls() {
@@ -33,6 +36,12 @@ function disposableUrls() {
   return { api, migration };
 }
 
+function deployMigrations(api, migration, schema = join(prismaDirectory, 'schema.prisma')) {
+  execFileSync(process.execPath, [require.resolve('prisma/build/index.js'), 'migrate', 'deploy', '--schema', schema], {
+    env: { ...process.env, DATABASE_URL: api.href, MIGRATION_DATABASE_URL: migration.href }, timeout: 40_000,
+  });
+}
+
 before(async () => {
   const { api, migration } = disposableUrls();
   const control = new URL(migration);
@@ -40,9 +49,7 @@ before(async () => {
   owner = new PrismaClient({ datasourceUrl: control.href });
   await owner.$executeRawUnsafe(`CREATE DATABASE "${databaseName}"`);
   created = true;
-  execFileSync(process.execPath, [require.resolve('prisma/build/index.js'), 'migrate', 'deploy', '--schema', resolve(__dirname, '../prisma/schema.prisma')], {
-    env: { ...process.env, DATABASE_URL: api.href, MIGRATION_DATABASE_URL: migration.href }, timeout: 40_000,
-  });
+  deployMigrations(api, migration);
   migrator = new PrismaClient({ datasourceUrl: migration.href });
   runtime = new PrismaClient({ datasourceUrl: api.href });
   const passwordHash = await hashPassword(password);
@@ -450,6 +457,7 @@ function acceptanceRequest(offer, overrides = {}) {
 
 async function acceptanceCounts() {
   return Promise.all([
+    migrator.purchase.count(),
     migrator.complimentaryAcceptance.count(),
     migrator.membership.count(),
     migrator.auditLog.count({ where: { action: acceptanceAction } }),
@@ -457,7 +465,7 @@ async function acceptanceCounts() {
   ]);
 }
 
-test('Admin records exact complimentary terms and one pending membership without financial effects', async () => {
+test('Admin records one complimentary Purchase with frozen terms, evidence and a pending membership', async () => {
   const offer = await acceptanceOffer();
   const write = acceptanceRequest(offer);
   const versionPath = offer.path + '/versions/' + offer.packageVersionId;
@@ -474,15 +482,20 @@ test('Admin records exact complimentary terms and one pending membership without
 
   const acceptance = await migrator.complimentaryAcceptance.findUniqueOrThrow({
     where: { id: issued.acceptanceId },
-    include: { membership: true, packageVersion: { include: { eligibility: true } } },
+    include: { purchase: { include: { membership: true, packageVersion: { include: { eligibility: true } } } } },
   });
-  const { packageVersion, membership } = acceptance;
+  const { purchase } = acceptance;
+  const { packageVersion, membership } = purchase;
   assert.deepEqual(issued, { acceptanceId: acceptance.id, membershipId: membership.id, status: 'PENDING_ACTIVATION' });
-  assert.equal(membership.status, 'PENDING_ACTIVATION');
+  assert.equal(acceptance.purchaseId, purchase.id);
+  assert.equal(membership.purchaseId, purchase.id);
   assert.equal((await expectStatus(409, '/memberships/' + membership.id + '/activate', adminWrite())).code, 'WORKFLOW_NOT_ENABLED');
-  assert.equal(acceptance.clientId, users.client.id);
-  assert.equal(acceptance.acceptedById, users.admin.id);
-  assert.equal(acceptance.acceptedAt.valueOf(), membership.createdAt.valueOf());
+  assert.equal(purchase.type, 'COMPLIMENTARY');
+  assert.equal(purchase.clientId, users.client.id);
+  assert.equal(purchase.packageVersionId, offer.packageVersionId);
+  assert.equal(purchase.acceptedById, users.admin.id);
+  assert.deepEqual(purchase.acceptedAt, membership.createdAt);
+  assert.deepEqual(purchase.createdAt, purchase.acceptedAt);
   assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
   assert.equal(acceptance.agreementEvidence, write.body.agreementEvidence);
   assert.equal(acceptance.purpose, write.body.purpose);
@@ -494,11 +507,15 @@ test('Admin records exact complimentary terms and one pending membership without
     kind: packageVersion.kind, validityDays: packageVersion.validityDays, sessionAllowance: packageVersion.sessionAllowance,
     sessionTypeIds: packageVersion.eligibility.map(link => link.sessionTypeId),
   }, offer.terms);
+  const { id, packageId, publishedAt, ...terms } = originalPublicVersion;
+  assert.deepEqual(purchase.terms, terms);
   const audit = await migrator.auditLog.findFirstOrThrow({ where: { action: acceptanceAction, targetId: acceptance.id } });
   assert.equal(audit.targetType, 'COMPLIMENTARY_ACCEPTANCE');
   assert.equal(audit.actorId, users.admin.id);
   assert(audit.requestId);
-  assert.deepEqual(audit.redactedDetails, { agreementMethod: write.body.agreementMethod, packageVersionId: offer.packageVersionId });
+  assert.deepEqual(audit.redactedDetails, {
+    purchaseId: purchase.id, agreementMethod: write.body.agreementMethod, packageVersionId: offer.packageVersionId,
+  });
   const retry = await migrator.idempotencyKey.findFirstOrThrow({ where: { key: write.key, operation: complimentaryOperation } });
   assert.equal(retry.resultStatus, 201);
   assert.equal(retry.resultReference, acceptance.id);
@@ -508,18 +525,29 @@ test('Admin records exact complimentary terms and one pending membership without
         'finance_event', 'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
   await assert.rejects(runtime.$executeRaw`UPDATE complimentary_acceptance SET purpose = 'Changed' WHERE id = ${acceptance.id}::uuid`,
     error => error.meta?.code === '42501');
+  await assert.rejects(runtime.$executeRaw`UPDATE purchase SET terms = '{}' WHERE id = ${purchase.id}::uuid`,
+    error => error.meta?.code === '42501');
+  await assert.rejects(runtime.$executeRaw`DELETE FROM purchase WHERE id = ${purchase.id}::uuid`,
+    error => error.meta?.code === '42501');
   await assert.rejects(runtime.$executeRaw`DELETE FROM membership WHERE id = ${membership.id}::uuid`,
     error => error.meta?.code === '42501');
 
   const publicVersion = await expectStatus(200, versionPath, publicReader);
   assert.deepEqual(publicVersion, originalPublicVersion);
-  for (const privateValue of [acceptance.id, membership.id, acceptance.clientId, acceptance.agreementEvidence, acceptance.purpose]) {
+  for (const privateValue of [purchase.id, acceptance.id, membership.id, purchase.clientId, acceptance.agreementEvidence, acceptance.purpose]) {
     assert(!JSON.stringify(publicVersion).includes(privateValue));
   }
-  await expectStatus(204, offer.path + '/archive', adminWrite({ expectedCurrentVersionId: offer.packageVersionId }));
+  const { versionId: successor } = await expectStatus(201, offer.path + '/versions', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, terms: { ...offer.terms, name: 'Successor', validityDays: 30 },
+  }));
+  await expectStatus(204, offer.path + '/versions/' + successor + '/publish', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, expectedDraftRevision: 1,
+  }));
+  await expectStatus(204, offer.path + '/archive', adminWrite({ expectedCurrentVersionId: successor }));
   assert.deepEqual(await expectStatus(201, complimentaryPath, write), issued);
-  assert.equal((await migrator.complimentaryAcceptance.findUniqueOrThrow({ where: { id: acceptance.id } })).packageVersionId,
-    offer.packageVersionId);
+  const historical = await migrator.purchase.findUniqueOrThrow({ where: { id: purchase.id } });
+  assert.equal(historical.packageVersionId, offer.packageVersionId);
+  assert.deepEqual(historical.terms, terms);
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 });
 
@@ -630,6 +658,108 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
   assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
   assert.equal(acceptance.agreementEvidence, write.body.agreementEvidence);
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
+});
+
+test('purchase migration backfills legacy acceptance and preserves historical replay', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'studio-purchase-upgrade-'));
+  const legacySchema = join(scratch, 'schema.prisma');
+  const { api, migration } = disposableUrls();
+  const upgradeName = databaseName + '_purchase_upgrade';
+  api.pathname = migration.pathname = '/' + upgradeName;
+  let upgradeDb, upgradeApp, upgradeCreated = false;
+  try {
+    cpSync(join(prismaDirectory, 'schema.prisma'), legacySchema);
+    mkdirSync(join(scratch, 'migrations'));
+    // Apply the exact migration history shipped at 2b496c8.
+    for (const name of ['migration_lock.toml', '20261104000100_foundation', '20261110000100_public_catalog',
+      '20261112000100_complimentary_acceptance']) {
+      cpSync(join(prismaDirectory, 'migrations', name), join(scratch, 'migrations', name), { recursive: true });
+    }
+    await owner.$executeRawUnsafe(`CREATE DATABASE "${upgradeName}"`);
+    upgradeCreated = true;
+    deployMigrations(api, migration, legacySchema);
+    upgradeDb = new PrismaClient({ datasourceUrl: migration.href });
+    const admin = await upgradeDb.user.create({ data: {
+      normalizedEmail: 'upgrade-admin@studio.example', role: Role.ADMIN, accountState: AccountState.ACTIVE,
+      passwordHash: await hashPassword(password), emailVerifiedAt: new Date(),
+    } });
+    const client = await upgradeDb.user.create({ data: {
+      normalizedEmail: 'upgrade-client@studio.example', role: Role.CLIENT, accountState: AccountState.ACTIVE,
+      client: { create: { displayName: 'Upgrade fixture' } },
+    } });
+    const type = await upgradeDb.sessionType.create({ data: { code: 'UPGRADE-SESSION', name: 'Original session', mode: 'GROUP' } });
+    const offer = await upgradeDb.package.create({ data: { code: 'UPGRADE-PACKAGE' } });
+    const version = await upgradeDb.packageVersion.create({ data: {
+      packageId: offer.id, version: 1, name: 'Original package', description: 'Original description', kind: 'SESSION',
+      price: '0.00', validityDays: 7, sessionAllowance: 1, eligibility: { create: { sessionTypeId: type.id } },
+    } });
+    await upgradeDb.packageVersion.update({
+      where: { id: version.id }, data: { publishedAt: new Date('2026-11-10T09:00:00.000Z') },
+    });
+    const acceptanceId = randomUUID();
+    const membershipId = randomUUID();
+    const acceptedAt = new Date('2026-11-11T09:00:00.123Z');
+    const body = { clientId: client.id, packageId: offer.id, packageVersionId: version.id, agreementMethod: 'VERBAL_AGREEMENT',
+      agreementEvidence: 'Historical verbal agreement note', purpose: 'Historical complimentary purpose' };
+    await upgradeDb.$executeRaw`
+      INSERT INTO complimentary_acceptance
+        (id, client_id, package_version_id, accepted_by, accepted_at, agreement_method, agreement_evidence, purpose)
+      VALUES (${acceptanceId}::uuid, ${client.id}::uuid, ${version.id}::uuid, ${admin.id}::uuid, ${acceptedAt},
+        ${body.agreementMethod}::agreement_method, ${body.agreementEvidence}, ${body.purpose})`;
+    await upgradeDb.$executeRaw`
+      INSERT INTO membership (id, created_at, acceptance_id) VALUES (${membershipId}::uuid, ${acceptedAt}, ${acceptanceId}::uuid)`;
+    await upgradeDb.package.update({
+      where: { id: offer.id }, data: { archivedAt: new Date('2026-11-11T10:00:00.000Z') },
+    });
+    const audit = await upgradeDb.auditLog.create({ data: {
+      actorId: admin.id, action: acceptanceAction, targetType: 'COMPLIMENTARY_ACCEPTANCE', targetId: acceptanceId,
+      requestId: randomUUID(), redactedDetails: { packageVersionId: version.id, agreementMethod: body.agreementMethod },
+    } });
+    const retry = await upgradeDb.idempotencyKey.create({ data: {
+      actorId: admin.id, operation: complimentaryOperation, key: randomUUID(), expiresAt: new Date(Date.now() + 60_000),
+      requestDigest: digest(JSON.stringify([client.id, offer.id, version.id, body.agreementMethod, body.agreementEvidence, body.purpose])),
+      resultStatus: 201, resultReference: acceptanceId,
+    } });
+
+    deployMigrations(api, migration);
+    deployMigrations(api, migration);
+    const purchase = await upgradeDb.purchase.findFirstOrThrow({ include: { acceptance: true, membership: true } });
+    assert.equal(purchase.clientId, client.id);
+    assert.equal(purchase.packageVersionId, version.id);
+    assert.equal(purchase.type, 'COMPLIMENTARY');
+    assert.equal(purchase.acceptedById, admin.id);
+    assert.deepEqual(purchase.acceptedAt, acceptedAt);
+    assert.deepEqual(purchase.createdAt, acceptedAt);
+    assert.deepEqual(purchase.terms, {
+      code: offer.code, version: 1, name: version.name, description: version.description,
+      price: '0.00', currency: 'SAR', kind: 'SESSION', validityDays: 7, sessionAllowance: 1,
+      sessionTypes: [{ id: type.id, code: type.code, name: type.name, mode: type.mode }],
+    });
+    assert.deepEqual(purchase.acceptance, { id: acceptanceId, purchaseId: purchase.id, agreementMethod: body.agreementMethod,
+      agreementEvidence: body.agreementEvidence, purpose: body.purpose });
+    assert.deepEqual(purchase.membership, { id: membershipId, purchaseId: purchase.id, createdAt: acceptedAt, status: 'PENDING_ACTIVATION' });
+    assert.deepEqual(await upgradeDb.auditLog.findUniqueOrThrow({ where: { id: audit.id } }), audit);
+    assert.deepEqual(await upgradeDb.idempotencyKey.findUniqueOrThrow({ where: { id: retry.id } }), retry);
+
+    upgradeApp = await startApp({ ...loadConfig({ ...process.env, DATABASE_URL: api.href, DASHBOARD_ORIGIN: allowedOrigin }),
+      host: '127.0.0.1', port: 0 });
+    const { accessToken } = await upgradeApp.get(Sessions).login(admin.normalizedEmail, password);
+    const response = await fetch((await upgradeApp.getUrl()) + '/api/v1' + complimentaryPath, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + accessToken, 'Idempotency-Key': retry.key },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), { acceptanceId, membershipId, status: 'PENDING_ACTIVATION' });
+    assert.deepEqual(await Promise.all([
+      upgradeDb.purchase.count(), upgradeDb.complimentaryAcceptance.count(), upgradeDb.membership.count(),
+      upgradeDb.auditLog.count(), upgradeDb.idempotencyKey.count(),
+    ]), [1, 1, 1, 1, 1]);
+  } finally {
+    await upgradeApp?.close();
+    await upgradeDb?.$disconnect();
+    if (upgradeCreated) await owner.$executeRawUnsafe(`DROP DATABASE "${upgradeName}" WITH (FORCE)`);
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {

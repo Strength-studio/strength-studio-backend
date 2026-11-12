@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AuditAction, AuditTarget, Prisma, Role } from '@prisma/client';
+import { AuditAction, AuditTarget, Prisma, PurchaseType, Role } from '@prisma/client';
 import { AccessContext, Sessions } from '../identity/session.service';
 import { audit } from '../platform/audit';
 import { Commands } from '../platform/commands';
@@ -44,13 +44,17 @@ export class ComplimentaryService {
           || version.currency !== 'SAR' || !version.price.isZero()) {
           throw failure(409, 'CATALOG_VERSION_NOT_ELIGIBLE');
         }
+        const [{ terms }] = await tx.$queryRaw<{ terms: Prisma.InputJsonObject }[]>`
+          SELECT public.purchase_terms_for_version(${packageVersionId}::uuid) AS terms`;
         const acceptedAt = await databaseTime(tx);
-        const acceptance = await tx.complimentaryAcceptance.create({
+        const purchase = await tx.purchase.create({
           data: {
-            clientId, packageVersionId, acceptedById: access.userId, acceptedAt, agreementMethod, agreementEvidence, purpose,
+            clientId, packageVersionId, type: PurchaseType.COMPLIMENTARY, acceptedById: access.userId,
+            acceptedAt, createdAt: acceptedAt, terms,
+            acceptance: { create: { agreementMethod, agreementEvidence, purpose } },
             membership: { create: { createdAt: acceptedAt } },
           },
-          select: { id: true },
+          select: { id: true, acceptance: { select: { id: true } } },
         }).catch(error => {
           if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
             && Array.isArray(error.meta?.target) && error.meta.target.includes('package_version_id')) {
@@ -58,17 +62,19 @@ export class ComplimentaryService {
           }
           throw error;
         });
+        const acceptanceId = purchase.acceptance!.id;
         await audit(tx, {
-          actorId: access.userId, requestId, targetId: acceptance.id, action: AuditAction.PURCHASE_ACCEPTED_RECORDED,
-          targetType: AuditTarget.COMPLIMENTARY_ACCEPTANCE, redactedDetails: { packageVersionId, agreementMethod },
+          actorId: access.userId, requestId, targetId: acceptanceId, action: AuditAction.PURCHASE_ACCEPTED_RECORDED,
+          targetType: AuditTarget.COMPLIMENTARY_ACCEPTANCE, redactedDetails: { purchaseId: purchase.id, packageVersionId, agreementMethod },
         });
-        return { status: 201, reference: acceptance.id };
+        // Keep acceptance IDs in replay records so pre-migration keys can return the original result.
+        return { status: 201, reference: acceptanceId };
       },
     });
 
     const acceptanceId = outcome.reference!;
-    const membership = await this.db.membership.findUniqueOrThrow({
-      where: { acceptanceId }, select: { id: true, status: true },
+    const membership = await this.db.membership.findFirstOrThrow({
+      where: { purchase: { acceptance: { id: acceptanceId } } }, select: { id: true, status: true },
     });
     return { acceptanceId, membershipId: membership.id, status: membership.status };
   }

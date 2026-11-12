@@ -113,7 +113,7 @@ model User {
   policies        PolicyRevision[]
   audit           AuditLog[]
   retries         IdempotencyKey[]
-  acceptances     ComplimentaryAcceptance[]
+  purchases       Purchase[]
 
   @@map("app_user")
 }
@@ -123,7 +123,7 @@ model ClientProfile {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   displayName String   @map("display_name")
   user        User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  acceptances ComplimentaryAcceptance[]
+  purchases   Purchase[]
 
   @@map("client_profile")
 }
@@ -294,7 +294,7 @@ model PackageVersion {
   basedOnVersion   PackageVersion?             @relation("PackageVersionBase", fields: [packageId, basedOnVersionId], references: [packageId, id], onDelete: Restrict, onUpdate: NoAction, map: "package_version_base_fkey")
   derivedVersions  PackageVersion[]            @relation("PackageVersionBase")
   eligibility      PackageVersionSessionType[]
-  acceptances      ComplimentaryAcceptance[]
+  purchases        Purchase[]
 
   // The reviewed SQL adds the partial unique index for the unsuperseded issued version.
   @@unique([packageId, version], map: "package_version_package_id_version_key")
@@ -339,32 +339,50 @@ enum MembershipStatus {
   @@map("membership_status")
 }
 
-model ComplimentaryAcceptance {
+enum PurchaseType {
+  COMPLIMENTARY
+
+  @@map("purchase_type")
+}
+
+model Purchase {
   id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   clientId          String          @map("client_id") @db.Uuid
   packageVersionId  String          @map("package_version_id") @db.Uuid
+  type              PurchaseType
   acceptedById      String          @map("accepted_by") @db.Uuid
   acceptedAt        DateTime        @map("accepted_at") @db.Timestamptz(6)
-  agreementMethod   AgreementMethod @map("agreement_method")
-  agreementEvidence String          @map("agreement_evidence") @db.VarChar(2000)
-  purpose           String          @db.VarChar(240)
+  terms             Json            @db.JsonB
   client            ClientProfile   @relation(fields: [clientId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
   packageVersion    PackageVersion  @relation(fields: [packageVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   acceptedBy        User            @relation(fields: [acceptedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  acceptance        ComplimentaryAcceptance?
   membership        Membership?
 
   @@unique([clientId, packageVersionId])
   @@index([packageVersionId])
   @@index([acceptedById])
+  @@map("purchase")
+}
+
+model ComplimentaryAcceptance {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  purchaseId        String          @unique @map("purchase_id") @db.Uuid
+  agreementMethod   AgreementMethod @map("agreement_method")
+  agreementEvidence String          @map("agreement_evidence") @db.VarChar(2000)
+  purpose           String          @db.VarChar(240)
+  purchase          Purchase        @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
   @@map("complimentary_acceptance")
 }
 
 model Membership {
-  id           String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  createdAt    DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
-  status       MembershipStatus        @default(PENDING_ACTIVATION)
-  acceptanceId String                  @unique @map("acceptance_id") @db.Uuid
-  acceptance   ComplimentaryAcceptance @relation(fields: [acceptanceId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  status     MembershipStatus @default(PENDING_ACTIVATION)
+  purchaseId String           @unique @map("purchase_id") @db.Uuid
+  purchase   Purchase         @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("membership")
 }

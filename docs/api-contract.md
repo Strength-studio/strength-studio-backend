@@ -67,7 +67,7 @@ The dashboard relays these three GET routes with the current session bearer and 
 
 `POST /purchases/complimentary` requires Admin, a bearer credential, and `Idempotency-Key`. Send `clientId`, `packageId`, `packageVersionId`, `agreementMethod`, `agreementEvidence`, and `purpose`. Use `SIGNED_AGREEMENT` with the signed agreement reference or `VERBAL_AGREEMENT` with a supporting note. Evidence and purpose must be nonblank and are limited to 2,000 and 240 characters respectively.
 
-The exact version must belong to the selected package and be published, current, unarchived, and priced at SAR 0. A successful request returns `201` with `acceptanceId`, `membershipId`, and `status: "PENDING_ACTIVATION"`. It records the agreement against the immutable Catalog version and issues no financial postings or usable entitlement.
+The exact version must belong to the selected package and be published, current, unarchived, and priced at SAR 0. A successful request returns `201` with `acceptanceId`, `membershipId`, and `status: "PENDING_ACTIVATION"`. The Purchase retains the exact Catalog version and a snapshot of its accepted terms and eligible session types. The agreement and pending membership both link to the Purchase. No financial postings or usable entitlement are issued.
 
 An authorized same-key replay returns the original IDs. A new key cannot repeat acceptance for the same Client and version. Missing Clients or package/version pairs return `404`. Ineligible versions and duplicate acceptances return `409`. Agreement evidence and purpose are stored on the acceptance and excluded from Catalog responses.
 
