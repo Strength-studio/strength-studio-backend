@@ -14,6 +14,8 @@ import { AccessEvents } from './identity/access-events';
 import { AccessGuard } from './identity/access.guard';
 import { Realtime } from './identity/realtime';
 import { Sessions } from './identity/session.service';
+import { PaymentController } from './payments/payment.controller';
+import { PaymentService } from './payments/payment.service';
 import { Commands } from './platform/commands';
 import { CONFIG, Config } from './platform/config';
 import { Database } from './platform/database';
@@ -32,10 +34,10 @@ export async function createApp(config: Config) {
     module: AppModule,
     imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
     controllers: [HealthController, AuthController, AccountsController, StudioController, DeferredController, CatalogController,
-      ClientController, ComplimentaryController, PositivePriceController],
+      ClientController, ComplimentaryController, PositivePriceController, PaymentController],
     providers: [
       { provide: CONFIG, useValue: config },
-      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService, PurchaseAcceptanceService,
+      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService, PurchaseAcceptanceService, PaymentService,
       { provide: APP_GUARD, useClass: ThrottlerGuard },
       { provide: APP_GUARD, useClass: AccessGuard },
     ],

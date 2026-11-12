@@ -80,6 +80,7 @@ enum AuditAction {
   CATALOG_ARCHIVED
   CATALOG_REFERENCE_CHANGED
   PURCHASE_ACCEPTED_RECORDED
+  PAYMENT_RECORDED
 
   @@map("audit_action")
 }
@@ -93,6 +94,7 @@ enum AuditTarget {
   SESSION_TYPE
   COMPLIMENTARY_ACCEPTANCE
   PURCHASE
+  PAYMENT
 
   @@map("audit_target")
 }
@@ -115,6 +117,7 @@ model User {
   audit           AuditLog[]
   retries         IdempotencyKey[]
   purchases       Purchase[]
+  recordedPayments Payment[]
 
   @@map("app_user")
 }
@@ -125,6 +128,7 @@ model ClientProfile {
   displayName String   @map("display_name")
   user        User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   purchases   Purchase[]
+  payments    Payment[]
 
   @@map("client_profile")
 }
@@ -389,4 +393,40 @@ model Membership {
   purchase   Purchase         @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("membership")
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  MADA
+  STC_PAY
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  UNVERIFIED
+
+  @@map("payment_status")
+}
+
+model Payment {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  intakeId     String        @unique @map("intake_id") @db.Uuid
+  clientId     String        @map("client_id") @db.Uuid
+  recordedById String        @map("recorded_by") @db.Uuid
+  amount       Decimal       @db.Decimal(19, 4)
+  currency     String        @db.VarChar(3)
+  method       PaymentMethod
+  status       PaymentStatus @default(UNVERIFIED)
+  receivedAt   DateTime      @map("received_at") @db.Timestamptz(6)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  reference    String?       @db.VarChar(200)
+  evidence     String?       @db.VarChar(2000)
+  client       ClientProfile @relation(fields: [clientId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
+  recordedBy   User          @relation(fields: [recordedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([clientId])
+  @@index([recordedById])
+  @@map("payment")
 }

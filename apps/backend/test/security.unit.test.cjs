@@ -59,3 +59,17 @@ test('configuration requires a real signing key and an exact dashboard origin', 
   assert.throws(() => loadConfig({ ...env, DASHBOARD_ORIGIN: 'https://dashboard.example/path' }), /DASHBOARD_ORIGIN/);
   assert.throws(() => loadConfig({ ...env, NODE_ENV: 'production', DASHBOARD_ORIGIN: 'http://localhost:3001' }), /DASHBOARD_ORIGIN/);
 });
+
+test('payment.record authorizes recording alone and uses the existing Staff grant', () => {
+  assert.equal(staffPermissions.get('payment.record'), StaffPermission.PAYMENT_RECORD);
+  assert.equal(hasAction(Role.ADMIN, [], 'payment.record'), true);
+  assert.equal(hasAction(Role.STAFF, [], 'payment.record'), false);
+  assert.equal(hasAction(Role.STAFF, [StaffPermission.PAYMENT_VERIFY, StaffPermission.PAYMENT_ALLOCATE], 'payment.record'), false);
+  for (const role of [Role.STAFF, Role.COACH, Role.CLIENT]) {
+    const grants = [StaffPermission.PAYMENT_RECORD];
+    assert.equal(hasAction(role, grants, 'payment.record'), role === Role.STAFF);
+    assert.equal(hasAction(role, grants, 'payment.verify'), false);
+    assert.equal(hasAction(role, grants, 'payment.allocate'), false);
+    assert.equal(hasAction(role, grants, 'membership.activate'), false);
+  }
+});

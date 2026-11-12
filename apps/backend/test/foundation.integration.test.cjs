@@ -474,6 +474,7 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
   const publicReader = { access: sessions.client.accessToken };
   const originalPublicVersion = await expectStatus(200, versionPath, publicReader);
   const before = await acceptanceCounts();
+  const paymentsBefore = await migrator.payment.count();
   const issued = await expectStatus(201, complimentaryPath, write);
   assert.deepEqual(await expectStatus(201, complimentaryPath, write), issued);
   assert.equal((await expectStatus(409, complimentaryPath, { ...write, key: randomUUID() })).code,
@@ -527,7 +528,7 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
   assert.equal(retry.resultReference, acceptance.id);
   assert.deepEqual(await migrator.$queryRaw`
     SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
-      AND table_name IN ('finance_account', 'payment', 'allocation', 'payment_allocation', 'receivable',
+      AND table_name IN ('finance_account', 'allocation', 'payment_allocation', 'receivable',
         'finance_event', 'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
   await assert.rejects(runtime.$executeRaw`UPDATE complimentary_acceptance SET purpose = 'Changed' WHERE id = ${acceptance.id}::uuid`,
     error => error.meta?.code === '42501');
@@ -555,6 +556,7 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
   assert.equal(historical.packageVersionId, offer.packageVersionId);
   assert.deepEqual(historical.terms, terms);
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
+  assert.equal(await migrator.payment.count(), paymentsBefore);
 });
 
 test('complimentary acceptance rejects unauthorized actors and invalid agreement or catalog input', async () => {
@@ -666,7 +668,7 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 });
 
-test('purchase migrations preserve historical replay and limit duplicate prevention to complimentary purchases', async () => {
+test('payment migration preserves historical purchase records and replay from the accepted baseline', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'studio-purchase-upgrade-'));
   const legacySchema = join(scratch, 'schema.prisma');
   const { api, migration } = disposableUrls();
@@ -727,16 +729,49 @@ test('purchase migrations preserve historical replay and limit duplicate prevent
       resultStatus: 201, resultReference: acceptanceId,
     } });
 
-    // Finish the accepted 2de650d baseline before applying the positive-price migrations.
-    for (const name of ['20261112000200_purchase_records', '20261112000300_complimentary_purchase_uniqueness']) {
+    // Finish the accepted d3fcc3d baseline before applying the payment migration.
+    for (const name of ['20261112000200_purchase_records', '20261112000300_complimentary_purchase_uniqueness',
+      '20261112000400_positive_price_purchase_type', '20261112000500_positive_price_purchase_uniqueness']) {
       cpSync(join(prismaDirectory, 'migrations', name), join(scratch, 'migrations', name), { recursive: true });
     }
     deployMigrations(api, migration, legacySchema);
     const originalPurchase = await upgradeDb.purchase.findFirstOrThrow();
+    const paidOffer = await upgradeDb.package.create({ data: { code: 'UPGRADE-POSITIVE' } });
+    const paidVersion = await upgradeDb.packageVersion.create({ data: {
+      packageId: paidOffer.id, version: 1, name: 'Historical positive-price offer', description: '',
+      kind: 'TIME', price: '75.00', validityDays: 7, eligibility: { create: { sessionTypeId: type.id } },
+    } });
+    await upgradeDb.packageVersion.update({ where: { id: paidVersion.id }, data: { publishedAt: acceptedAt } });
+    const paidBody = { ...body, packageId: paidOffer.id, packageVersionId: paidVersion.id };
+    const paidKey = randomUUID();
+    async function upgradeRequester() {
+      upgradeApp = await startApp({ ...loadConfig({ ...process.env, DATABASE_URL: api.href, DASHBOARD_ORIGIN: allowedOrigin }),
+        host: '127.0.0.1', port: 0 });
+      const { accessToken } = await upgradeApp.get(Sessions).login(admin.normalizedEmail, password);
+      const origin = await upgradeApp.getUrl();
+      return (path, payload, key) => fetch(origin + '/api/v1' + path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + accessToken, 'Idempotency-Key': key },
+        body: JSON.stringify(payload),
+      });
+    }
+    const legacyPost = await upgradeRequester();
+    const paidAcceptance = await legacyPost(positivePricePath, paidBody, paidKey);
+    assert.equal(paidAcceptance.status, 201);
+    const { purchaseId: paidId } = await paidAcceptance.json();
+    const paidPurchase = () => upgradeDb.purchase.findUniqueOrThrow({
+      where: { id: paidId }, include: { acceptance: true, membership: true },
+    });
+    const paidBefore = await paidPurchase();
+    const paidAudit = await upgradeDb.auditLog.findFirstOrThrow({ where: { targetType: 'PURCHASE', targetId: paidId } });
+    const paidRetry = await upgradeDb.idempotencyKey.findFirstOrThrow({ where: { operation: positivePriceOperation, key: paidKey } });
+    await upgradeApp.close();
+    upgradeApp = undefined;
 
     deployMigrations(api, migration);
     deployMigrations(api, migration);
-    const purchase = await upgradeDb.purchase.findFirstOrThrow({ include: { acceptance: true, membership: true } });
+    const purchase = await upgradeDb.purchase.findUniqueOrThrow({
+      where: { id: originalPurchase.id }, include: { acceptance: true, membership: true },
+    });
     const { acceptance, membership, ...purchaseFields } = purchase;
     assert.deepEqual(purchaseFields, originalPurchase);
     assert.equal(purchase.clientId, client.id);
@@ -755,20 +790,21 @@ test('purchase migrations preserve historical replay and limit duplicate prevent
     assert.deepEqual(purchase.membership, { id: membershipId, purchaseId: purchase.id, createdAt: acceptedAt, status: 'PENDING_ACTIVATION' });
     assert.deepEqual(await upgradeDb.auditLog.findUniqueOrThrow({ where: { id: audit.id } }), audit);
     assert.deepEqual(await upgradeDb.idempotencyKey.findUniqueOrThrow({ where: { id: retry.id } }), retry);
+    assert.deepEqual(await paidPurchase(), paidBefore);
+    assert.deepEqual(await upgradeDb.auditLog.findUniqueOrThrow({ where: { id: paidAudit.id } }), paidAudit);
+    assert.deepEqual(await upgradeDb.idempotencyKey.findUniqueOrThrow({ where: { id: paidRetry.id } }), paidRetry);
 
-    upgradeApp = await startApp({ ...loadConfig({ ...process.env, DATABASE_URL: api.href, DASHBOARD_ORIGIN: allowedOrigin }),
-      host: '127.0.0.1', port: 0 });
-    const { accessToken } = await upgradeApp.get(Sessions).login(admin.normalizedEmail, password);
-    const response = await fetch((await upgradeApp.getUrl()) + '/api/v1' + complimentaryPath, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + accessToken, 'Idempotency-Key': retry.key },
-      body: JSON.stringify(body),
-    });
+    const upgradedPost = await upgradeRequester();
+    const response = await upgradedPost(complimentaryPath, body, retry.key);
     assert.equal(response.status, 201);
     assert.deepEqual(await response.json(), { acceptanceId, membershipId, status: 'PENDING_ACTIVATION' });
+    const paidReplay = await upgradedPost(positivePricePath, paidBody, paidKey);
+    assert.equal(paidReplay.status, 201);
+    assert.deepEqual(await paidReplay.json(), { purchaseId: paidId });
     assert.deepEqual(await Promise.all([
       upgradeDb.purchase.count(), upgradeDb.purchaseAcceptance.count(), upgradeDb.membership.count(),
-      upgradeDb.auditLog.count(), upgradeDb.idempotencyKey.count(),
-    ]), [1, 1, 1, 1, 1]);
+      upgradeDb.auditLog.count(), upgradeDb.idempotencyKey.count(), upgradeDb.payment.count(),
+    ]), [2, 2, 1, 2, 2, 0]);
 
     // Model a future type only in this disposable database.
     await upgradeDb.$executeRaw`ALTER TYPE purchase_type ADD VALUE 'TEST_REPEATABLE'`;
@@ -792,6 +828,7 @@ test('Admin accepts a positive-price agreement with frozen terms and no membersh
   const reader = { access: sessions.client.accessToken };
   const publicVersion = await expectStatus(200, versionPath, reader);
   const [purchases, acceptances, memberships, audits, keys] = await acceptanceCounts(positivePriceOperation);
+  const paymentsBefore = await migrator.payment.count();
   const issued = await expectStatus(201, positivePricePath, write);
   assert.deepEqual(await expectStatus(201, positivePricePath, write), issued);
   assert.equal((await expectStatus(409, positivePricePath, { ...write, key: randomUUID() })).code,
@@ -836,6 +873,7 @@ test('Admin accepts a positive-price agreement with frozen terms and no membersh
   assert.deepEqual(await expectStatus(201, positivePricePath, write), issued);
   assert.deepEqual((await migrator.purchase.findUniqueOrThrow({ where: { id: purchase.id } })).terms, terms);
   assert.deepEqual(await acceptanceCounts(positivePriceOperation), [purchases + 1, acceptances + 1, memberships, audits + 1, keys + 1]);
+  assert.equal(await migrator.payment.count(), paymentsBefore);
 });
 
 test('positive-price acceptance rejects unauthorized actors and ineligible versions without writing records', async () => {
@@ -906,6 +944,179 @@ test('positive-price audit failure rolls back the agreement and leaves the key r
   const acceptance = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { purchaseId } });
   assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
   assert.equal(acceptance.agreementEvidence, write.body.agreementEvidence);
+});
+
+const paymentPath = '/payments';
+const paymentAction = 'payment.record';
+
+function paymentRequest(overrides = {}) {
+  return adminWrite({
+    clientId: users.client.id, intakeId: randomUUID(), amount: '123.4', currency: 'SAR', method: 'BANK_TRANSFER',
+    receivedAt: '2025-01-10T15:04:05.678+03:00', reference: ' 001-X ', evidence: ' Outside evidence note. ', ...overrides,
+  });
+}
+
+async function paymentCounts() {
+  return Promise.all([
+    migrator.payment.count(),
+    migrator.auditLog.count({ where: { action: 'PAYMENT_RECORDED' } }),
+    migrator.idempotencyKey.count({ where: { operation: paymentAction } }),
+  ]);
+}
+
+test('Admin records an immutable unverified payment with no purchase or membership effects', async () => {
+  const offer = await acceptanceOffer('123.40');
+  await expectStatus(201, positivePricePath, acceptanceRequest(offer));
+  const complimentary = await acceptanceOffer();
+  await expectStatus(201, complimentaryPath, acceptanceRequest(complimentary));
+  const purchases = () => migrator.purchase.findMany({
+    where: { clientId: users.client.id }, orderBy: { id: 'asc' }, include: { membership: true, acceptance: true },
+  });
+  const beforePurchases = await purchases();
+  assert(beforePurchases.some(purchase => purchase.membership?.status === 'PENDING_ACTIVATION'));
+  const before = await paymentCounts();
+  const write = paymentRequest();
+  const result = await expectStatus(201, paymentPath, write);
+  assert.deepEqual(await expectStatus(201, paymentPath, { ...write, body: {
+    ...write.body, amount: '123.40', receivedAt: '2025-01-10T12:04:05.678Z',
+    reference: '001-X', evidence: 'Outside evidence note.',
+  } }), result);
+  assert.equal((await expectStatus(409, paymentPath, { ...write, key: randomUUID() })).code, 'PAYMENT_INTAKE_EXISTS');
+  assert.equal((await expectStatus(409, paymentPath, { ...write, body: { ...write.body, amount: '123.41' } })).code,
+    'IDEMPOTENCY_KEY_REUSED');
+  assert.deepEqual(await paymentCounts(), before.map(count => count + 1));
+
+  const payment = await migrator.payment.findUniqueOrThrow({ where: { id: result.paymentId } });
+  assert.deepEqual(result, { paymentId: payment.id, status: 'UNVERIFIED' });
+  assert.equal(payment.status, 'UNVERIFIED');
+  assert.equal(payment.intakeId, write.body.intakeId);
+  assert.equal(payment.clientId, users.client.id);
+  assert.equal(payment.recordedById, users.admin.id);
+  assert.equal(payment.amount.toFixed(2), '123.40');
+  assert.equal(payment.currency, 'SAR');
+  assert.equal(payment.method, 'BANK_TRANSFER');
+  assert.equal(payment.receivedAt.toISOString(), '2025-01-10T12:04:05.678Z');
+  assert(payment.createdAt >= payment.receivedAt);
+  assert.equal(payment.reference, '001-X');
+  assert.equal(payment.evidence, 'Outside evidence note.');
+  const audit = await migrator.auditLog.findFirstOrThrow({
+    where: { action: 'PAYMENT_RECORDED', targetType: 'PAYMENT', targetId: payment.id },
+  });
+  assert.equal(audit.actorId, users.admin.id);
+  assert(audit.requestId);
+  assert.deepEqual(audit.redactedDetails, {});
+  const retry = await migrator.idempotencyKey.findFirstOrThrow({ where: { operation: paymentAction, key: write.key } });
+  assert.equal(retry.resultStatus, 201);
+  assert.equal(retry.resultReference, payment.id);
+  assert.deepEqual(await purchases(), beforePurchases);
+  assert.deepEqual(await migrator.$queryRaw`
+    SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
+      AND table_name IN ('finance_account', 'allocation', 'payment_allocation', 'receivable', 'installment',
+        'finance_event', 'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
+  assert.deepEqual(await migrator.$queryRaw`
+    SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payment'
+      AND column_name IN ('purchase_id', 'allocated_at', 'verified_at')`, []);
+  await assert.rejects(runtime.$executeRaw`UPDATE payment SET amount = 1 WHERE id = ${payment.id}::uuid`,
+    error => error.meta?.code === '42501');
+  await assert.rejects(runtime.$executeRaw`DELETE FROM payment WHERE id = ${payment.id}::uuid`,
+    error => error.meta?.code === '42501');
+  assert.deepEqual(await migrator.$queryRaw`
+    SELECT has_table_privilege('studio_reporting', 'public.payment', 'INSERT,UPDATE,DELETE') AS reporting,
+           has_table_privilege('studio_worker', 'public.payment', 'INSERT,UPDATE,DELETE') AS worker`,
+  [{ reporting: false, worker: false }]);
+});
+
+test('only Admin and Staff with the current payment.record grant may record payments', async () => {
+  const before = await paymentCounts();
+  const write = { ...paymentRequest({ method: 'CASH', reference: undefined, evidence: undefined }), access: sessions.staff.accessToken };
+  for (const role of ['staff', 'clientManager', 'coach', 'client']) {
+    await expectStatus(403, paymentPath, { ...write, access: sessions[role].accessToken });
+  }
+  await expectStatus(401, paymentPath, { ...write, access: undefined });
+  assert.deepEqual(await paymentCounts(), before);
+  await expectStatus(204, `/staff-grants/${users.staff.id}/payment.record`, grantOptions(true));
+  const recorded = await expectStatus(201, paymentPath, write);
+  const payment = await migrator.payment.findUniqueOrThrow({ where: { id: recorded.paymentId } });
+  assert.equal(payment.recordedById, users.staff.id);
+  assert.equal(payment.status, 'UNVERIFIED');
+  assert.equal(payment.reference, null);
+  assert.equal(payment.evidence, null);
+  for (const suffix of ['verify', 'allocate']) {
+    await expectStatus(404, `${paymentPath}/${payment.id}/${suffix}`, { ...write, body: {} });
+  }
+  await expectStatus(204, `/staff-grants/${users.staff.id}/payment.record`, grantOptions(false));
+  await expectStatus(403, paymentPath, write);
+  assert.deepEqual(await paymentCounts(), before.map(count => count + 1));
+});
+
+test('invalid payment requests leave no payment, audit or idempotency outcome', async () => {
+  const before = await paymentCounts();
+  assert.equal((await expectStatus(400, paymentPath, { ...paymentRequest(), key: undefined })).code, 'INVALID_IDEMPOTENCY_KEY');
+  for (const [status, code, overrides] of [
+    [400, 'INVALID_INPUT', { clientId: undefined }],
+    [400, 'INVALID_INPUT', { clientId: 'bad-id' }],
+    [404, 'CLIENT_NOT_FOUND', { clientId: randomUUID() }],
+    [404, 'CLIENT_NOT_FOUND', { clientId: users.missingProfile.id }],
+    [404, 'CLIENT_NOT_FOUND', { clientId: users.coach.id }],
+    [400, 'INVALID_INPUT', { intakeId: undefined }],
+    [400, 'INVALID_INPUT', { intakeId: 'bad-id' }],
+    [400, 'INVALID_INPUT', { amount: '0.00' }],
+    [400, 'INVALID_INPUT', { amount: '-1.00' }],
+    [400, 'INVALID_INPUT', { amount: '0.001' }],
+    [400, 'INVALID_INPUT', { amount: '1e2' }],
+    [400, 'INVALID_INPUT', { amount: 12 }],
+    [400, 'INVALID_INPUT', { amount: '1000000000000000.00' }],
+    [400, 'INVALID_INPUT', { currency: 'USD' }],
+    [400, 'INVALID_INPUT', { method: 'CARD' }],
+    [400, 'INVALID_INPUT', { receivedAt: '2025-02-29T12:00:00Z' }],
+    [400, 'INVALID_INPUT', { receivedAt: '2025-01-10T12:00:00' }],
+    [400, 'INVALID_INPUT', { receivedAt: '2025-01-10T24:00:00Z' }],
+    [400, 'INVALID_INPUT', { receivedAt: '2025-01-10T12:00:00.0001Z' }],
+    [400, 'INVALID_INPUT', { receivedAt: new Date(Date.now() + 3600_000).toISOString() }],
+    [400, 'INVALID_INPUT', { reference: 'ABC\nDEF' }],
+    [400, 'INVALID_INPUT', { reference: ' ' }],
+    [400, 'INVALID_INPUT', { evidence: true }],
+    [400, 'INVALID_INPUT', { evidence: 'abc\u0000def' }],
+    [400, 'INVALID_INPUT', { purchaseId: randomUUID() }],
+  ]) {
+    assert.equal((await expectStatus(status, paymentPath, paymentRequest(overrides))).code, code);
+  }
+  assert.deepEqual(await paymentCounts(), before);
+});
+
+test('concurrent payment retries deduplicate by intake across actors and Clients', async () => {
+  const before = await paymentCounts();
+  const write = paymentRequest({ method: 'MADA' });
+  const replays = await Promise.all([expectStatus(201, paymentPath, write), expectStatus(201, paymentPath, write)]);
+  assert.deepEqual(replays[0], replays[1]);
+  const differentIntake = paymentRequest({ method: 'STC_PAY' });
+  const responses = await Promise.all([
+    request(paymentPath, differentIntake),
+    request(paymentPath, { ...differentIntake, key: randomUUID(), access: sessions.raceAdmin.accessToken,
+      body: { ...differentIntake.body, clientId: users.other.id } }),
+  ]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [201, 409]);
+  const conflict = await responses.find(response => response.status === 409).json();
+  assert.equal(conflict.code, 'PAYMENT_INTAKE_EXISTS');
+  assert.deepEqual(Object.keys(conflict).sort(), ['code', 'requestId']);
+  const separate = await expectStatus(201, paymentPath, { ...write, key: randomUUID(), body: { ...write.body, intakeId: randomUUID() } });
+  assert.notEqual(separate.paymentId, replays[0].paymentId);
+  assert.deepEqual(await paymentCounts(), before.map(count => count + 3));
+});
+
+test('payment audit failure rolls back the record and leaves its idempotency key reusable', async () => {
+  const before = await paymentCounts();
+  const write = paymentRequest();
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_payment_audit
+    CHECK (action <> 'PAYMENT_RECORDED') NOT VALID`;
+  try {
+    assert.equal((await expectStatus(500, paymentPath, write)).code, 'INTERNAL_ERROR');
+    assert.deepEqual(await paymentCounts(), before);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_payment_audit`;
+  }
+  await expectStatus(201, paymentPath, write);
+  assert.deepEqual(await paymentCounts(), before.map(count => count + 1));
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {

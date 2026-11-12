@@ -1363,6 +1363,68 @@
           "Positive-price purchases"
         ]
       }
+    },
+    "/api/v1/payments": {
+      "post": {
+        "description": "Requires payment.record. Creates an unverified and unallocated receipt record.",
+        "operationId": "PaymentController_record",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordPaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedPaymentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Client not found"
+          },
+          "409": {
+            "description": "Intake already recorded or idempotency key cannot be replayed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record a reported SAR payment",
+        "tags": [
+          "Payments"
+        ]
+      }
     }
   },
   "info": {
@@ -1996,6 +2058,83 @@
         },
         "required": [
           "purchaseId"
+        ]
+      },
+      "RecordPaymentDto": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "intakeId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable, caller-generated receipt intake ID. Reuse it when retrying the same reported payment."
+          },
+          "amount": {
+            "type": "string",
+            "example": "120.50",
+            "description": "Positive decimal string with at most two fractional digits."
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "SAR"
+            ]
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "CASH",
+              "BANK_TRANSFER",
+              "MADA",
+              "STC_PAY"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Receipt timestamp with an explicit UTC offset and at most millisecond precision."
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "Supporting note or reference to evidence held outside the app."
+          }
+        },
+        "required": [
+          "clientId",
+          "intakeId",
+          "amount",
+          "currency",
+          "method",
+          "receivedAt"
+        ]
+      },
+      "RecordedPaymentDto": {
+        "type": "object",
+        "properties": {
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "UNVERIFIED"
+            ]
+          }
+        },
+        "required": [
+          "paymentId",
+          "status"
         ]
       }
     }

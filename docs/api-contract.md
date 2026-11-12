@@ -20,7 +20,7 @@ Sockets use short-lived, single-use tickets minted through authenticated REST. B
 
 ## Route families
 
-All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The public catalog and purchase acceptance routes below are implemented. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
+All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The public catalog, purchase acceptance, and payment recording routes below are implemented. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
 
 | Family | Endpoint and action |
 |---|---|
@@ -76,6 +76,12 @@ An authorized same-key replay returns the original IDs. A new key cannot repeat 
 `POST /purchases/positive-price` requires Admin, a bearer credential, and `Idempotency-Key`. It accepts the same fields and agreement methods as complimentary acceptance. The exact public version must be published, current, unarchived, and priced above zero. Price and currency come from the Catalog version.
 
 Success returns `201` with `{ purchaseId }`. The Purchase records the accepted terms, agreement evidence, Admin, and timestamp. Acceptance creates no membership, financial posting, or entitlement. An authorized same-key replay returns the original Purchase ID. Another key for the same Client and version returns `409 POSITIVE_PRICE_ACCEPTANCE_EXISTS`. Missing Clients and package/version pairs return `404`, and ineligible versions return `409 CATALOG_VERSION_NOT_ELIGIBLE`.
+
+## Implemented payment recording
+
+`POST /payments` requires a bearer credential, `Idempotency-Key`, and Admin or the current Staff grant `payment.record`. Send `clientId`, `intakeId`, `amount`, `currency`, `method`, and `receivedAt`. The Client must have an existing Client profile. Use a positive decimal string with up to two fractional digits, `SAR`, and one of `CASH`, `BANK_TRANSFER`, `MADA`, or `STC_PAY`. Send a past or current ISO timestamp with an explicit offset and up to millisecond precision. Optional `reference` and `evidence` fields hold a transaction reference and a supporting note or external evidence reference.
+
+Success returns `201` with `{ paymentId, status: "UNVERIFIED" }`. The record has no Purchase link and creates no financial postings or membership changes. A same-key replay with the same input returns the original payment ID. Generate one intake UUID per reported receipt and retain it across retries, including retries with a new idempotency key. A reused intake UUID returns `409 PAYMENT_INTAKE_EXISTS` without disclosing the existing record. Reference numbers are evidence and carry no global uniqueness guarantee. Records are append-only for the runtime role. Method configuration, issuer-level receipt identity, corrections, verification, and allocation remain deferred.
 
 ## Write retries
 
