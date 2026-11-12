@@ -20,7 +20,8 @@ import { Database } from './platform/database';
 import { HealthController } from './platform/health.controller';
 import { ErrorFilter, requestContext } from './platform/http';
 import { ComplimentaryController } from './purchases/complimentary.controller';
-import { ComplimentaryService } from './purchases/complimentary.service';
+import { PositivePriceController } from './purchases/positive-price.controller';
+import { PurchaseAcceptanceService } from './purchases/purchase-acceptance.service';
 import { StudioController } from './studio/studio.controller';
 
 @Module({})
@@ -31,10 +32,10 @@ export async function createApp(config: Config) {
     module: AppModule,
     imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
     controllers: [HealthController, AuthController, AccountsController, StudioController, DeferredController, CatalogController,
-      ClientController, ComplimentaryController],
+      ClientController, ComplimentaryController, PositivePriceController],
     providers: [
       { provide: CONFIG, useValue: config },
-      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService, ComplimentaryService,
+      Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService, PurchaseAcceptanceService,
       { provide: APP_GUARD, useClass: ThrottlerGuard },
       { provide: APP_GUARD, useClass: AccessGuard },
     ],

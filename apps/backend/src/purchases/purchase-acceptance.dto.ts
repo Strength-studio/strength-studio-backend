@@ -7,7 +7,7 @@ function trimmed(value: unknown) {
   return typeof value === 'string' ? value.trim() : value;
 }
 
-export class AcceptComplimentaryPackageDto {
+export class AcceptPackageDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   clientId!: string;
@@ -30,10 +30,22 @@ export class AcceptComplimentaryPackageDto {
   @IsString() @IsNotEmpty() @MaxLength(2000) @Matches(/^[^\u0000]+$/u)
   agreementEvidence!: string;
 
-  @ApiProperty({ minLength: 1, maxLength: 240, description: 'Purpose of complimentary issuance.' })
+  @ApiProperty({ minLength: 1, maxLength: 240, description: 'Purpose of accepting the package.' })
   @Transform(({ value }) => trimmed(value))
   @IsString() @IsNotEmpty() @MaxLength(240) @Matches(/^[^\u0000]+$/u)
   purpose!: string;
+}
+
+export class AcceptComplimentaryPackageDto extends AcceptPackageDto {
+  @ApiProperty({ minLength: 1, maxLength: 240, description: 'Purpose of complimentary issuance.' })
+  declare purpose: string;
+}
+
+export class AcceptPositivePricePackageDto extends AcceptPackageDto {}
+
+export class PositivePriceAcceptanceDto {
+  @ApiProperty({ format: 'uuid' })
+  purchaseId!: string;
 }
 
 export class ComplimentaryAcceptanceDto {

@@ -2,14 +2,14 @@ import { Body, Controller, Headers, Post, Req } from '@nestjs/common';
 import { ApiBadRequestResponse, ApiBearerAuth, ApiConflictResponse, ApiCreatedResponse, ApiForbiddenResponse, ApiHeader,
   ApiNotFoundResponse, ApiOperation, ApiTags, ApiUnauthorizedResponse } from '@nestjs/swagger';
 import { RequireAction, StudioRequest } from '../platform/http';
-import { AcceptComplimentaryPackageDto, ComplimentaryAcceptanceDto } from './complimentary.dto';
-import { ComplimentaryService } from './complimentary.service';
+import { AcceptComplimentaryPackageDto, ComplimentaryAcceptanceDto } from './purchase-acceptance.dto';
+import { PurchaseAcceptanceService } from './purchase-acceptance.service';
 
 @ApiTags('Complimentary purchases')
 @ApiBearerAuth()
 @Controller('purchases')
 export class ComplimentaryController {
-  constructor(private readonly complimentary: ComplimentaryService) {}
+  constructor(private readonly purchases: PurchaseAcceptanceService) {}
 
   @Post('complimentary') @RequireAction('purchase.accept_record')
   @ApiOperation({ summary: 'Accept a published SAR 0 version for an existing Client',
@@ -23,6 +23,6 @@ export class ComplimentaryController {
   @ApiConflictResponse({ description: 'Version is ineligible, acceptance already exists, or the idempotency key cannot be replayed' })
   accept(@Body() dto: AcceptComplimentaryPackageDto, @Headers('idempotency-key') key: string | undefined,
     @Req() req: StudioRequest) {
-    return this.complimentary.accept(req.access!, req.requestId, key, dto);
+    return this.purchases.acceptComplimentary(req.access!, req.requestId, key, dto);
   }
 }

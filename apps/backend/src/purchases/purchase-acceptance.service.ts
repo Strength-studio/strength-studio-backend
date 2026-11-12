@@ -5,16 +5,29 @@ import { audit } from '../platform/audit';
 import { Commands } from '../platform/commands';
 import { Database, databaseTime } from '../platform/database';
 import { failure } from '../platform/http';
-import { AcceptComplimentaryPackageDto } from './complimentary.dto';
+import { AcceptPackageDto } from './purchase-acceptance.dto';
 
 const action = 'purchase.accept_record';
-const operation = 'purchase.accept-complimentary';
 
 @Injectable()
-export class ComplimentaryService {
+export class PurchaseAcceptanceService {
   constructor(private readonly db: Database, private readonly commands: Commands, private readonly sessions: Sessions) {}
 
-  async accept(access: AccessContext, requestId: string, key: string | undefined, dto: AcceptComplimentaryPackageDto) {
+  async acceptComplimentary(access: AccessContext, requestId: string, key: string | undefined, dto: AcceptPackageDto) {
+    const acceptanceId = await this.record(PurchaseType.COMPLIMENTARY, access, requestId, key, dto);
+    const membership = await this.db.membership.findFirstOrThrow({
+      where: { purchase: { acceptance: { id: acceptanceId } } }, select: { id: true, status: true },
+    });
+    return { acceptanceId, membershipId: membership.id, status: membership.status };
+  }
+
+  async acceptPositivePrice(access: AccessContext, requestId: string, key: string | undefined, dto: AcceptPackageDto) {
+    return { purchaseId: await this.record(PurchaseType.POSITIVE_PRICE, access, requestId, key, dto) };
+  }
+
+  private async record(type: PurchaseType, access: AccessContext, requestId: string, key: string | undefined, dto: AcceptPackageDto) {
+    const complimentary = type === PurchaseType.COMPLIMENTARY;
+    const operation = complimentary ? 'purchase.accept-complimentary' : 'purchase.accept-positive-price';
     const clientId = dto.clientId.toLowerCase();
     const packageId = dto.packageId.toLowerCase();
     const packageVersionId = dto.packageVersionId.toLowerCase();
@@ -40,8 +53,8 @@ export class ComplimentaryService {
         await this.sessions.authorize(tx, access, [action]);
         if (!offer || !version) throw failure(404, 'CATALOG_VERSION_NOT_FOUND');
         // The current catalog contains only public offers. Issued terms and eligibility are immutable.
-        if (offer.archived_at || !version.published_at || version.superseded_at
-          || version.currency !== 'SAR' || !version.price.isZero()) {
+        const eligiblePrice = complimentary ? version.currency === 'SAR' && version.price.isZero() : version.price.gt(0);
+        if (offer.archived_at || !version.published_at || version.superseded_at || !eligiblePrice) {
           throw failure(409, 'CATALOG_VERSION_NOT_ELIGIBLE');
         }
         const [{ terms }] = await tx.$queryRaw<{ terms: Prisma.InputJsonObject }[]>`
@@ -49,33 +62,31 @@ export class ComplimentaryService {
         const acceptedAt = await databaseTime(tx);
         const purchase = await tx.purchase.create({
           data: {
-            clientId, packageVersionId, type: PurchaseType.COMPLIMENTARY, acceptedById: access.userId,
+            clientId, packageVersionId, type, acceptedById: access.userId,
             acceptedAt, createdAt: acceptedAt, terms,
             acceptance: { create: { agreementMethod, agreementEvidence, purpose } },
-            membership: { create: { createdAt: acceptedAt } },
+            membership: complimentary ? { create: { createdAt: acceptedAt } } : undefined,
           },
           select: { id: true, acceptance: { select: { id: true } } },
         }).catch(error => {
           if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
             && Array.isArray(error.meta?.target) && error.meta.target.includes('package_version_id')) {
-            throw failure(409, 'COMPLIMENTARY_ACCEPTANCE_EXISTS');
+            throw failure(409, complimentary ? 'COMPLIMENTARY_ACCEPTANCE_EXISTS' : 'POSITIVE_PRICE_ACCEPTANCE_EXISTS');
           }
           throw error;
         });
         const acceptanceId = purchase.acceptance!.id;
         await audit(tx, {
-          actorId: access.userId, requestId, targetId: acceptanceId, action: AuditAction.PURCHASE_ACCEPTED_RECORDED,
-          targetType: AuditTarget.COMPLIMENTARY_ACCEPTANCE, redactedDetails: { purchaseId: purchase.id, packageVersionId, agreementMethod },
+          actorId: access.userId, requestId, targetId: complimentary ? acceptanceId : purchase.id,
+          action: AuditAction.PURCHASE_ACCEPTED_RECORDED,
+          targetType: complimentary ? AuditTarget.COMPLIMENTARY_ACCEPTANCE : AuditTarget.PURCHASE,
+          redactedDetails: { packageVersionId, agreementMethod, ...(complimentary ? { purchaseId: purchase.id } : { acceptanceId }) },
         });
         // Keep acceptance IDs in replay records so pre-migration keys can return the original result.
-        return { status: 201, reference: acceptanceId };
+        return { status: 201, reference: complimentary ? acceptanceId : purchase.id };
       },
     });
 
-    const acceptanceId = outcome.reference!;
-    const membership = await this.db.membership.findFirstOrThrow({
-      where: { purchase: { acceptance: { id: acceptanceId } } }, select: { id: true, status: true },
-    });
-    return { acceptanceId, membershipId: membership.id, status: membership.status };
+    return outcome.reference!;
   }
 }

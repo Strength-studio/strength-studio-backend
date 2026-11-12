@@ -92,6 +92,7 @@ enum AuditTarget {
   PACKAGE
   SESSION_TYPE
   COMPLIMENTARY_ACCEPTANCE
+  PURCHASE
 
   @@map("audit_target")
 }
@@ -341,6 +342,7 @@ enum MembershipStatus {
 
 enum PurchaseType {
   COMPLIMENTARY
+  POSITIVE_PRICE
 
   @@map("purchase_type")
 }
@@ -357,17 +359,17 @@ model Purchase {
   client            ClientProfile   @relation(fields: [clientId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
   packageVersion    PackageVersion  @relation(fields: [packageVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   acceptedBy        User            @relation(fields: [acceptedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  acceptance        ComplimentaryAcceptance?
+  acceptance        PurchaseAcceptance?
   membership        Membership?
 
-  // A SQL partial unique index enforces one complimentary Purchase per Client and version.
+  // SQL partial unique indexes enforce duplicate acceptance separately for each supported purchase type.
   @@index([clientId])
   @@index([packageVersionId])
   @@index([acceptedById])
   @@map("purchase")
 }
 
-model ComplimentaryAcceptance {
+model PurchaseAcceptance {
   id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   purchaseId        String          @unique @map("purchase_id") @db.Uuid
   agreementMethod   AgreementMethod @map("agreement_method")
@@ -375,6 +377,7 @@ model ComplimentaryAcceptance {
   purpose           String          @db.VarChar(240)
   purchase          Purchase        @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
+  // Retain the original table and constraints for existing acceptance records.
   @@map("complimentary_acceptance")
 }
 

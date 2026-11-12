@@ -20,7 +20,7 @@ Sockets use short-lived, single-use tickets minted through authenticated REST. B
 
 ## Route families
 
-All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The public catalog and complimentary acceptance routes below are implemented. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
+All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The public catalog and purchase acceptance routes below are implemented. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
 
 | Family | Endpoint and action |
 |---|---|
@@ -70,6 +70,12 @@ The dashboard relays these three GET routes with the current session bearer and 
 The exact version must belong to the selected package and be published, current, unarchived, and priced at SAR 0. A successful request returns `201` with `acceptanceId`, `membershipId`, and `status: "PENDING_ACTIVATION"`. The Purchase retains the exact Catalog version and a snapshot of its accepted terms and eligible session types. The agreement and pending membership both link to the Purchase. No financial postings or usable entitlement are issued.
 
 An authorized same-key replay returns the original IDs. A new key cannot repeat acceptance for the same Client and version. Missing Clients or package/version pairs return `404`. Ineligible versions and duplicate acceptances return `409`. Agreement evidence and purpose are stored on the acceptance and excluded from Catalog responses.
+
+## Implemented positive-price acceptance
+
+`POST /purchases/positive-price` requires Admin, a bearer credential, and `Idempotency-Key`. It accepts the same fields and agreement methods as complimentary acceptance. The exact public version must be published, current, unarchived, and priced above zero. Price and currency come from the Catalog version.
+
+Success returns `201` with `{ purchaseId }`. The Purchase records the accepted terms, agreement evidence, Admin, and timestamp. Acceptance creates no membership, financial posting, or entitlement. An authorized same-key replay returns the original Purchase ID. Another key for the same Client and version returns `409 POSITIVE_PRICE_ACCEPTANCE_EXISTS`. Missing Clients and package/version pairs return `404`, and ineligible versions return `409 CATALOG_VERSION_NOT_ELIGIBLE`.
 
 ## Write retries
 

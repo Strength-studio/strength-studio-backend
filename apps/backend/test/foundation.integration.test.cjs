@@ -424,6 +424,8 @@ test('zero-price publication and session-type retirement enforce catalog authori
 
 const complimentaryPath = '/purchases/complimentary';
 const complimentaryOperation = 'purchase.accept-complimentary';
+const positivePricePath = '/purchases/positive-price';
+const positivePriceOperation = 'purchase.accept-positive-price';
 const acceptanceAction = 'PURCHASE_ACCEPTED_RECORDED';
 
 function adminWrite(body) {
@@ -455,13 +457,13 @@ function acceptanceRequest(offer, overrides = {}) {
   });
 }
 
-async function acceptanceCounts() {
+async function acceptanceCounts(operation = complimentaryOperation) {
   return Promise.all([
     migrator.purchase.count(),
-    migrator.complimentaryAcceptance.count(),
+    migrator.purchaseAcceptance.count(),
     migrator.membership.count(),
     migrator.auditLog.count({ where: { action: acceptanceAction } }),
-    migrator.idempotencyKey.count({ where: { operation: complimentaryOperation } }),
+    migrator.idempotencyKey.count({ where: { operation } }),
   ]);
 }
 
@@ -480,7 +482,7 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
     'IDEMPOTENCY_KEY_REUSED');
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 
-  const acceptance = await migrator.complimentaryAcceptance.findUniqueOrThrow({
+  const acceptance = await migrator.purchaseAcceptance.findUniqueOrThrow({
     where: { id: issued.acceptanceId },
     include: { purchase: { include: { membership: true, packageVersion: { include: { eligibility: true } } } } },
   });
@@ -658,7 +660,7 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
     await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_acceptance_audit`;
   }
   const issued = await expectStatus(201, complimentaryPath, write);
-  const acceptance = await migrator.complimentaryAcceptance.findUniqueOrThrow({ where: { id: issued.acceptanceId } });
+  const acceptance = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { id: issued.acceptanceId } });
   assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
   assert.equal(acceptance.agreementEvidence, write.body.agreementEvidence);
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
@@ -725,8 +727,10 @@ test('purchase migrations preserve historical replay and limit duplicate prevent
       resultStatus: 201, resultReference: acceptanceId,
     } });
 
-    const purchaseMigration = '20261112000200_purchase_records';
-    cpSync(join(prismaDirectory, 'migrations', purchaseMigration), join(scratch, 'migrations', purchaseMigration), { recursive: true });
+    // Finish the accepted 2de650d baseline before applying the positive-price migrations.
+    for (const name of ['20261112000200_purchase_records', '20261112000300_complimentary_purchase_uniqueness']) {
+      cpSync(join(prismaDirectory, 'migrations', name), join(scratch, 'migrations', name), { recursive: true });
+    }
     deployMigrations(api, migration, legacySchema);
     const originalPurchase = await upgradeDb.purchase.findFirstOrThrow();
 
@@ -762,7 +766,7 @@ test('purchase migrations preserve historical replay and limit duplicate prevent
     assert.equal(response.status, 201);
     assert.deepEqual(await response.json(), { acceptanceId, membershipId, status: 'PENDING_ACTIVATION' });
     assert.deepEqual(await Promise.all([
-      upgradeDb.purchase.count(), upgradeDb.complimentaryAcceptance.count(), upgradeDb.membership.count(),
+      upgradeDb.purchase.count(), upgradeDb.purchaseAcceptance.count(), upgradeDb.membership.count(),
       upgradeDb.auditLog.count(), upgradeDb.idempotencyKey.count(),
     ]), [1, 1, 1, 1, 1]);
 
@@ -779,6 +783,129 @@ test('purchase migrations preserve historical replay and limit duplicate prevent
     if (upgradeCreated) await owner.$executeRawUnsafe(`DROP DATABASE "${upgradeName}" WITH (FORCE)`);
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+test('Admin accepts a positive-price agreement with frozen terms and no membership', async () => {
+  const offer = await acceptanceOffer('123.45');
+  const write = acceptanceRequest(offer);
+  const versionPath = offer.path + '/versions/' + offer.packageVersionId;
+  const reader = { access: sessions.client.accessToken };
+  const publicVersion = await expectStatus(200, versionPath, reader);
+  const [purchases, acceptances, memberships, audits, keys] = await acceptanceCounts(positivePriceOperation);
+  const issued = await expectStatus(201, positivePricePath, write);
+  assert.deepEqual(await expectStatus(201, positivePricePath, write), issued);
+  assert.equal((await expectStatus(409, positivePricePath, { ...write, key: randomUUID() })).code,
+    'POSITIVE_PRICE_ACCEPTANCE_EXISTS');
+  assert.equal((await expectStatus(409, positivePricePath, { ...write, body: { ...write.body, purpose: 'Changed' } })).code,
+    'IDEMPOTENCY_KEY_REUSED');
+
+  const purchase = await migrator.purchase.findUniqueOrThrow({
+    where: { id: issued.purchaseId }, include: { acceptance: true, membership: true },
+  });
+  assert.deepEqual(issued, { purchaseId: purchase.id });
+  assert.equal(purchase.clientId, users.client.id);
+  assert.equal(purchase.packageVersionId, offer.packageVersionId);
+  assert.equal(purchase.type, 'POSITIVE_PRICE');
+  assert.equal(purchase.acceptedById, users.admin.id);
+  assert.deepEqual(purchase.createdAt, purchase.acceptedAt);
+  assert.equal(purchase.membership, null);
+  const { id, packageId, publishedAt, ...terms } = publicVersion;
+  assert.deepEqual(purchase.terms, terms);
+  assert.deepEqual(purchase.acceptance, {
+    id: purchase.acceptance.id, purchaseId: purchase.id, agreementMethod: write.body.agreementMethod,
+    agreementEvidence: write.body.agreementEvidence, purpose: write.body.purpose,
+  });
+  const audit = await migrator.auditLog.findFirstOrThrow({ where: { action: acceptanceAction, targetType: 'PURCHASE', targetId: purchase.id } });
+  assert.equal(audit.actorId, users.admin.id);
+  assert(audit.requestId);
+  assert.deepEqual(audit.redactedDetails, {
+    acceptanceId: purchase.acceptance.id, agreementMethod: write.body.agreementMethod, packageVersionId: offer.packageVersionId,
+  });
+  const retry = await migrator.idempotencyKey.findFirstOrThrow({ where: { key: write.key, operation: positivePriceOperation } });
+  assert.equal(retry.resultStatus, 201);
+  assert.equal(retry.resultReference, purchase.id);
+  assert.deepEqual(await expectStatus(200, versionPath, reader), publicVersion);
+
+  const { versionId: successor } = await expectStatus(201, offer.path + '/versions', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, terms: { ...offer.terms, price: '200.00' },
+  }));
+  await expectStatus(204, offer.path + '/versions/' + successor + '/publish', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, expectedDraftRevision: 1,
+  }));
+  await expectStatus(204, offer.path + '/archive', adminWrite({ expectedCurrentVersionId: successor }));
+  assert.deepEqual(await expectStatus(201, positivePricePath, write), issued);
+  assert.deepEqual((await migrator.purchase.findUniqueOrThrow({ where: { id: purchase.id } })).terms, terms);
+  assert.deepEqual(await acceptanceCounts(positivePriceOperation), [purchases + 1, acceptances + 1, memberships, audits + 1, keys + 1]);
+});
+
+test('positive-price acceptance rejects unauthorized actors and ineligible versions without writing records', async () => {
+  const offer = await acceptanceOffer('49.99');
+  const free = await acceptanceOffer();
+  const { versionId: draft } = await expectStatus(201, offer.path + '/versions', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, terms: null,
+  }));
+  const before = await acceptanceCounts(positivePriceOperation);
+  const write = acceptanceRequest(offer);
+  for (const role of ['staff', 'coach', 'client']) {
+    await expectStatus(403, positivePricePath, { ...write, access: sessions[role].accessToken });
+  }
+  await expectStatus(401, positivePricePath, { ...write, access: undefined });
+  assert.equal((await expectStatus(400, positivePricePath, { ...write, key: undefined })).code, 'INVALID_IDEMPOTENCY_KEY');
+
+  for (const [status, code, overrides] of [
+    [404, 'CLIENT_NOT_FOUND', { clientId: randomUUID() }],
+    [404, 'CLIENT_NOT_FOUND', { clientId: users.missingProfile.id }],
+    [404, 'CATALOG_VERSION_NOT_FOUND', { packageId: randomUUID() }],
+    [404, 'CATALOG_VERSION_NOT_FOUND', { packageVersionId: randomUUID() }],
+    [404, 'CATALOG_VERSION_NOT_FOUND', { packageVersionId: free.packageVersionId }],
+    [409, 'CATALOG_VERSION_NOT_ELIGIBLE', { packageId: free.packageId, packageVersionId: free.packageVersionId }],
+    [409, 'CATALOG_VERSION_NOT_ELIGIBLE', { packageVersionId: draft }],
+    [400, 'INVALID_INPUT', { agreementMethod: 'IN_APP_CONFIRMATION' }],
+    [400, 'INVALID_INPUT', { agreementEvidence: undefined }],
+    [400, 'INVALID_INPUT', { agreementEvidence: '  ' }],
+    [400, 'INVALID_INPUT', { purpose: '  ' }],
+    [400, 'INVALID_INPUT', { price: '1.00' }],
+  ]) {
+    assert.equal((await expectStatus(status, positivePricePath, acceptanceRequest(offer, overrides))).code, code);
+  }
+  await expectStatus(204, offer.path + '/versions/' + draft + '/publish', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, expectedDraftRevision: 1,
+  }));
+  assert.equal((await expectStatus(409, positivePricePath, write)).code, 'CATALOG_VERSION_NOT_ELIGIBLE');
+  await expectStatus(204, offer.path + '/archive', adminWrite({ expectedCurrentVersionId: draft }));
+  assert.equal((await expectStatus(409, positivePricePath, acceptanceRequest(offer, { packageVersionId: draft }))).code,
+    'CATALOG_VERSION_NOT_ELIGIBLE');
+  assert.deepEqual(await acceptanceCounts(positivePriceOperation), before);
+});
+
+test('concurrent positive-price acceptance with different keys creates one agreement', async () => {
+  const offer = await acceptanceOffer('12.50');
+  const [purchases, acceptances, memberships, audits, keys] = await acceptanceCounts(positivePriceOperation);
+  const responses = await Promise.all([
+    request(positivePricePath, acceptanceRequest(offer)),
+    request(positivePricePath, { ...acceptanceRequest(offer), access: sessions.raceAdmin.accessToken }),
+  ]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [201, 409]);
+  assert.equal((await responses.find(response => response.status === 409).json()).code, 'POSITIVE_PRICE_ACCEPTANCE_EXISTS');
+  assert.deepEqual(await acceptanceCounts(positivePriceOperation), [purchases + 1, acceptances + 1, memberships, audits + 1, keys + 1]);
+});
+
+test('positive-price audit failure rolls back the agreement and leaves the key reusable', async () => {
+  const offer = await acceptanceOffer('10.00');
+  const write = acceptanceRequest(offer, { agreementMethod: 'VERBAL_AGREEMENT', agreementEvidence: 'Client agreed to the terms.' });
+  const before = await acceptanceCounts(positivePriceOperation);
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_positive_purchase_audit
+    CHECK (target_type <> 'PURCHASE') NOT VALID`;
+  try {
+    assert.equal((await expectStatus(500, positivePricePath, write)).code, 'INTERNAL_ERROR');
+    assert.deepEqual(await acceptanceCounts(positivePriceOperation), before);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_positive_purchase_audit`;
+  }
+  const { purchaseId } = await expectStatus(201, positivePricePath, write);
+  const acceptance = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { purchaseId } });
+  assert.equal(acceptance.agreementMethod, write.body.agreementMethod);
+  assert.equal(acceptance.agreementEvidence, write.body.agreementEvidence);
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {

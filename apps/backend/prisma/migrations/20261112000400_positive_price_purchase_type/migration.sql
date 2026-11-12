@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TYPE public.purchase_type ADD VALUE 'POSITIVE_PRICE';
+ALTER TYPE public.audit_target ADD VALUE 'PURCHASE';
+
+COMMIT;
