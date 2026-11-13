@@ -1690,6 +1690,20 @@ test('purchase funding returns a generic integrity error for malformed frozen te
   assert.deepEqual(Object.keys(error).sort(), ['code', 'requestId']);
 });
 
+test('purchase funding rejects frozen prices that contradict the purchase type', async () => {
+  const { purchaseId: paidId } = await allocationPurchase();
+  const { acceptanceId } = await expectStatus(201, complimentaryPath, acceptanceRequest(await acceptanceOffer()));
+  const { purchaseId: complimentaryId } = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { id: acceptanceId } });
+  const admin = { access: sessions.admin.accessToken };
+  for (const [purchaseId, price] of [[paidId, '0.00'], [complimentaryId, '25.00']]) {
+    await migrator.$executeRaw`
+      UPDATE purchase SET terms = jsonb_set(terms, '{price}', to_jsonb(${price}::text)) WHERE id = ${purchaseId}::uuid`;
+    const error = await expectStatus(500, fundingPath(purchaseId), admin);
+    assert.equal(error.code, 'INTERNAL_ERROR');
+    assert.deepEqual(Object.keys(error).sort(), ['code', 'requestId']);
+  }
+});
+
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
   const ticket = (await expectStatus(200, '/auth/socket-ticket', { method: 'POST', access: sessions.staff.accessToken })).ticket;
   const wrongOrigin = await fetch(base + '/socket.io/?EIO=4&transport=polling', { headers: { origin: 'https://untrusted.example' } });

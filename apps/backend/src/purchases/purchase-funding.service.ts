@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, PurchaseType } from '@prisma/client';
 import { Database } from '../platform/database';
 import { failure } from '../platform/http';
 import { PurchaseFundingDto } from './purchase-funding.dto';
@@ -10,9 +10,9 @@ export class PurchaseFundingService {
 
   async summary(purchaseId: string): Promise<PurchaseFundingDto> {
     const [purchase] = await this.db.$queryRaw<{
-      id: string; price: string | null; currency: string | null; allocated: Prisma.Decimal;
+      id: string; type: PurchaseType; price: string | null; currency: string | null; allocated: Prisma.Decimal;
     }[]>`
-      SELECT p.id,
+      SELECT p.id, p.type,
         CASE WHEN jsonb_typeof(p.terms->'price') = 'string' THEN p.terms->>'price' END AS price,
         p.terms->>'currency' AS currency,
         (SELECT COALESCE(SUM(a.amount), 0) FROM payment_allocation a WHERE a.purchase_id = p.id) AS allocated
@@ -23,6 +23,9 @@ export class PurchaseFundingService {
     }
 
     const price = new Prisma.Decimal(purchase.price);
+    if (price.isZero() !== (purchase.type === PurchaseType.COMPLIMENTARY)) {
+      throw failure(500, 'INTERNAL_ERROR');
+    }
     const remaining = price.minus(purchase.allocated);
     if (remaining.isNegative()) throw failure(409, 'PURCHASE_OVERFUNDED');
     return {
