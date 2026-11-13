@@ -82,6 +82,7 @@ enum AuditAction {
   PURCHASE_ACCEPTED_RECORDED
   PAYMENT_RECORDED
   PAYMENT_VERIFIED
+  PAYMENT_ALLOCATED
 
   @@map("audit_action")
 }
@@ -96,6 +97,7 @@ enum AuditTarget {
   COMPLIMENTARY_ACCEPTANCE
   PURCHASE
   PAYMENT
+  PAYMENT_ALLOCATION
 
   @@map("audit_target")
 }
@@ -120,6 +122,7 @@ model User {
   purchases       Purchase[]
   recordedPayments Payment[]     @relation("PaymentRecorder")
   verifiedPayments Payment[]     @relation("PaymentVerifier")
+  paymentAllocations PaymentAllocation[]
 
   @@map("app_user")
 }
@@ -367,6 +370,7 @@ model Purchase {
   acceptedBy        User            @relation(fields: [acceptedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
   acceptance        PurchaseAcceptance?
   membership        Membership?
+  paymentAllocations PaymentAllocation[]
 
   // SQL partial unique indexes enforce duplicate acceptance separately for each supported purchase type.
   @@index([clientId])
@@ -431,8 +435,27 @@ model Payment {
   client       ClientProfile @relation(fields: [clientId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
   recordedBy   User          @relation("PaymentRecorder", fields: [recordedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
   verifiedBy   User?         @relation("PaymentVerifier", fields: [verifiedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  allocations  PaymentAllocation[]
 
   @@index([clientId])
   @@index([recordedById])
   @@map("payment")
+}
+
+model PaymentAllocation {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId     String   @map("payment_id") @db.Uuid
+  purchaseId    String   @map("purchase_id") @db.Uuid
+  amount        Decimal  @db.Decimal(19, 4)
+  currency      String   @db.VarChar(3)
+  allocatedById String   @map("allocated_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  payment       Payment  @relation(fields: [paymentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  purchase      Purchase @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  allocatedBy   User     @relation(fields: [allocatedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([paymentId])
+  @@index([purchaseId])
+  @@index([allocatedById])
+  @@map("payment_allocation")
 }

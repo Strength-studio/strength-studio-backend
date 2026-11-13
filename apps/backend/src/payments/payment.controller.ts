@@ -2,7 +2,7 @@ import { Body, Controller, Headers, HttpCode, Param, ParseUUIDPipe, Post, Req } 
 import { ApiBadRequestResponse, ApiBearerAuth, ApiBody, ApiConflictResponse, ApiCreatedResponse, ApiForbiddenResponse, ApiHeader,
   ApiNotFoundResponse, ApiOkResponse, ApiOperation, ApiParam, ApiTags, ApiUnauthorizedResponse } from '@nestjs/swagger';
 import { failure, RequireAction, StudioRequest } from '../platform/http';
-import { RecordedPaymentDto, RecordPaymentDto, VerifiedPaymentDto } from './payment.dto';
+import { AllocatePaymentDto, PaymentAllocationDto, RecordedPaymentDto, RecordPaymentDto, VerifiedPaymentDto } from './payment.dto';
 import { PaymentService } from './payment.service';
 
 @ApiTags('Payments')
@@ -43,5 +43,21 @@ export class PaymentController {
       throw failure(400, 'INVALID_INPUT');
     }
     return this.payments.verify(req.access!, req.requestId, key, paymentId);
+  }
+
+  @Post(':paymentId/allocations') @RequireAction('payment.allocate')
+  @ApiOperation({ summary: 'Allocate verified payment funds to a purchase',
+    description: 'Admin only. Records an allocation to an existing purchase for the same Client.' })
+  @ApiParam({ name: 'paymentId', schema: { type: 'string', format: 'uuid' } })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiCreatedResponse({ type: PaymentAllocationDto })
+  @ApiBadRequestResponse({ description: 'Invalid request or idempotency key' })
+  @ApiUnauthorizedResponse()
+  @ApiForbiddenResponse()
+  @ApiNotFoundResponse({ description: 'Payment or purchase not found' })
+  @ApiConflictResponse({ description: 'Payment is ineligible, purchase ownership differs, amount exceeds available funds, or idempotency key cannot be replayed' })
+  allocate(@Param('paymentId', ParseUUIDPipe) paymentId: string, @Body() dto: AllocatePaymentDto,
+    @Headers('idempotency-key') key: string | undefined, @Req() req: StudioRequest) {
+    return this.payments.allocate(req.access!, req.requestId, key, paymentId, dto);
   }
 }

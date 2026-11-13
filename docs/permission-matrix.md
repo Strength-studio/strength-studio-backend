@@ -24,7 +24,8 @@ This is the canonical action and resource map for the [API contract](api-contrac
 | `finance.read`, `installment.manage` | Yes | Same named grants, independently. No due-date revision through installment management | No | Own financial reads only, including credit and transaction history |
 | `payment.record` | Yes | Named grant | No | No |
 | `payment.verify` | **Admin only** | **Denied with all grants**, including legacy `payment.verify` | No | No |
-| `payment.authorize` (proposed), `payment.allocate` | Final authorization/rejection/return and manual allocation, respectively | No | No | No |
+| `payment.allocate` | **Admin only** | **Denied with all grants**, including legacy `payment.allocate` | No | No |
+| `payment.authorize` (proposed) | Final authorization/rejection/return | No | No | No |
 | `payment.correction.request` (proposed) | Yes | Same named grant, request only | No | No |
 | `credit.apply`, `purchase.cancel`, `installment.revise_due_date` (proposed) | Yes | No | No | No |
 | `payment.reverse`, `credit.adjust` | Yes | No | No | No |
@@ -49,7 +50,7 @@ Booking requests include cancellation and reschedule requests, not their approva
 
 ## Foundation authorization differences
 
-The table is the approved activation policy and target commercial map. The public catalog API implements `catalog.read` and `catalog.manage` as independent Staff grants. Only Admin can publish zero-priced offers or manage session-type records. Package audit history requires both `catalog.manage` and `audit.read`. Private offer permissions remain inactive. The API rejects new Staff activation grants and ignores stored legacy rows for authorization. The stored `payment.allocate` value confers no runtime authority. Legacy purchase review/record values do not confer the dedicated acceptance action. See the [O-15 reconciliation](milestone-2-readiness-review.md#o-15-authorization-conflict).
+The table is the approved activation policy and target commercial map. The public catalog API implements `catalog.read` and `catalog.manage` as independent Staff grants. Only Admin can publish zero-priced offers or manage session-type records. Package audit history requires both `catalog.manage` and `audit.read`. Private offer permissions remain inactive. The API rejects Staff grants for activation, payment verification, and payment allocation, and ignores stored legacy rows for those actions. Legacy purchase review/record values do not confer the dedicated acceptance action. See the [O-15 reconciliation](milestone-2-readiness-review.md#o-15-authorization-conflict).
 
 The Technical Administrator is an infrastructure identity. Technical and emergency credentials confer no business actions, including commission access. See [deployment and security](architecture-review.md#deployment-and-security).
 

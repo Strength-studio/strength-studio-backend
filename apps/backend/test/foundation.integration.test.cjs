@@ -475,6 +475,7 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
   const originalPublicVersion = await expectStatus(200, versionPath, publicReader);
   const before = await acceptanceCounts();
   const paymentsBefore = await migrator.payment.count();
+  const allocationsBefore = await migrator.paymentAllocation.count();
   const issued = await expectStatus(201, complimentaryPath, write);
   assert.deepEqual(await expectStatus(201, complimentaryPath, write), issued);
   assert.equal((await expectStatus(409, complimentaryPath, { ...write, key: randomUUID() })).code,
@@ -528,7 +529,7 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
   assert.equal(retry.resultReference, acceptance.id);
   assert.deepEqual(await migrator.$queryRaw`
     SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
-      AND table_name IN ('finance_account', 'allocation', 'payment_allocation', 'receivable',
+      AND table_name IN ('finance_account', 'allocation', 'receivable',
         'finance_event', 'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
   await assert.rejects(runtime.$executeRaw`UPDATE complimentary_acceptance SET purpose = 'Changed' WHERE id = ${acceptance.id}::uuid`,
     error => error.meta?.code === '42501');
@@ -557,6 +558,7 @@ test('Admin records one complimentary Purchase with frozen terms, evidence and a
   assert.deepEqual(historical.terms, terms);
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
   assert.equal(await migrator.payment.count(), paymentsBefore);
+  assert.equal(await migrator.paymentAllocation.count(), allocationsBefore);
 });
 
 test('complimentary acceptance rejects unauthorized actors and invalid agreement or catalog input', async () => {
@@ -668,7 +670,7 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 });
 
-test('payment migrations preserve historical purchases, unverified payments and replay across upgrades', async () => {
+test('payment migrations preserve historical purchases, receipts and replay across upgrades', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'studio-purchase-upgrade-'));
   const legacySchema = join(scratch, 'schema.prisma');
   const { api, migration } = disposableUrls();
@@ -778,12 +780,37 @@ test('payment migrations preserve historical purchases, unverified payments and 
         75.00, 'SAR', 'BANK_TRANSFER', ${acceptedAt}, 'original reference', 'original evidence')
       RETURNING to_jsonb(payment) AS receipt`;
 
+    const verificationMigration = '20261113000100_payment_verification';
+    cpSync(join(prismaDirectory, 'migrations', verificationMigration), join(scratch, 'migrations', verificationMigration), { recursive: true });
+    deployMigrations(api, migration, legacySchema);
+    const [unverifiedPayment] = await upgradeDb.$queryRaw`
+      SELECT to_jsonb(payment) AS receipt FROM payment WHERE id = ${legacyPaymentId}::uuid`;
+    assert.deepEqual(unverifiedPayment.receipt, { ...legacyPayment.receipt, verified_by: null, verified_at: null });
+    const verificationKey = randomUUID();
+    const verifyPath = `/payments/${legacyPaymentId}/verify`;
+    const preAllocationPost = await upgradeRequester();
+    const verification = await preAllocationPost(verifyPath, {}, verificationKey);
+    assert.equal(verification.status, 200);
+    const verifiedResponse = await verification.json();
+    assert.deepEqual(verifiedResponse, { paymentId: legacyPaymentId, status: 'VERIFIED' });
+    const verifiedPayment = await upgradeDb.payment.findUniqueOrThrow({ where: { id: legacyPaymentId } });
+    const verificationAudit = await upgradeDb.auditLog.findFirstOrThrow({
+      where: { action: 'PAYMENT_VERIFIED', targetId: legacyPaymentId },
+    });
+    await upgradeApp.close();
+    upgradeApp = undefined;
+
     deployMigrations(api, migration);
     deployMigrations(api, migration);
     const [upgradedPayment] = await upgradeDb.$queryRaw`
       SELECT to_jsonb(payment) AS receipt FROM payment WHERE id = ${legacyPaymentId}::uuid`;
-    assert.deepEqual(upgradedPayment.receipt, { ...legacyPayment.receipt, verified_by: null, verified_at: null });
-    assert.equal(upgradedPayment.receipt.status, 'UNVERIFIED');
+    assert.deepEqual(upgradedPayment.receipt, {
+      ...legacyPayment.receipt, status: 'VERIFIED', verified_by: admin.id, verified_at: upgradedPayment.receipt.verified_at,
+    });
+    assert(upgradedPayment.receipt.verified_at);
+    assert.deepEqual(await upgradeDb.payment.findUniqueOrThrow({ where: { id: legacyPaymentId } }), verifiedPayment);
+    assert.deepEqual(await upgradeDb.auditLog.findUniqueOrThrow({ where: { id: verificationAudit.id } }), verificationAudit);
+    assert.equal(await upgradeDb.paymentAllocation.count(), 0);
     const purchase = await upgradeDb.purchase.findUniqueOrThrow({
       where: { id: originalPurchase.id }, include: { acceptance: true, membership: true },
     });
@@ -819,10 +846,13 @@ test('payment migrations preserve historical purchases, unverified payments and 
     assert.deepEqual(await Promise.all([
       upgradeDb.purchase.count(), upgradeDb.purchaseAcceptance.count(), upgradeDb.membership.count(),
       upgradeDb.auditLog.count(), upgradeDb.idempotencyKey.count(), upgradeDb.payment.count(),
-    ]), [2, 2, 1, 2, 2, 1]);
-    const verification = await upgradedPost(`/payments/${legacyPaymentId}/verify`, {}, randomUUID());
-    assert.equal(verification.status, 200);
-    assert.deepEqual(await verification.json(), { paymentId: legacyPaymentId, status: 'VERIFIED' });
+    ]), [2, 2, 1, 3, 3, 1]);
+    const verifiedReplay = await upgradedPost(verifyPath, {}, verificationKey);
+    assert.equal(verifiedReplay.status, 200);
+    assert.deepEqual(await verifiedReplay.json(), verifiedResponse);
+    const allocation = await upgradedPost(`/payments/${legacyPaymentId}/allocations`, { purchaseId: paidId, amount: '75.00' }, randomUUID());
+    assert.equal(allocation.status, 201);
+    assert.equal(await upgradeDb.paymentAllocation.count(), 1);
 
     // Model a future type only in this disposable database.
     await upgradeDb.$executeRaw`ALTER TYPE purchase_type ADD VALUE 'TEST_REPEATABLE'`;
@@ -993,6 +1023,7 @@ test('Admin records an immutable unverified payment with no purchase or membersh
   const beforePurchases = await purchases();
   assert(beforePurchases.some(purchase => purchase.membership?.status === 'PENDING_ACTIVATION'));
   const before = await paymentCounts();
+  const allocationsBefore = await migrator.paymentAllocation.count();
   const write = paymentRequest();
   const result = await expectStatus(201, paymentPath, write);
   assert.deepEqual(await expectStatus(201, paymentPath, { ...write, body: {
@@ -1031,11 +1062,12 @@ test('Admin records an immutable unverified payment with no purchase or membersh
   assert.deepEqual(await purchases(), beforePurchases);
   assert.deepEqual(await migrator.$queryRaw`
     SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
-      AND table_name IN ('finance_account', 'allocation', 'payment_allocation', 'receivable', 'installment',
+      AND table_name IN ('finance_account', 'allocation', 'receivable', 'installment',
         'finance_event', 'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
   assert.deepEqual(await migrator.$queryRaw`
     SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payment'
       AND column_name IN ('purchase_id', 'allocated_at')`, []);
+  assert.equal(await migrator.paymentAllocation.count(), allocationsBefore);
   await assert.rejects(runtime.$executeRaw`UPDATE payment SET amount = 1 WHERE id = ${payment.id}::uuid`,
     error => error.meta?.code === '42501');
   await assert.rejects(runtime.$executeRaw`DELETE FROM payment WHERE id = ${payment.id}::uuid`,
@@ -1167,6 +1199,7 @@ test('Admin verifies an existing payment and writes one audit without changing r
   assert(purchaseSnapshot.some(purchase => purchase.type === 'POSITIVE_PRICE'));
   assert(purchaseSnapshot.some(purchase => purchase.membership?.status === 'PENDING_ACTIVATION'));
   const paymentsBefore = await paymentCounts();
+  const allocationsBefore = await migrator.paymentAllocation.count();
   const [{ now: before }] = await migrator.$queryRaw`SELECT clock_timestamp() AS now`;
   const write = { ...adminWrite(), access: sessions.raceAdmin.accessToken };
   const result = await expectStatus(200, path, write);
@@ -1186,8 +1219,9 @@ test('Admin verifies an existing payment and writes one audit without changing r
   assert.deepEqual(await paymentCounts(), paymentsBefore);
   assert.deepEqual(await migrator.$queryRaw`
     SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
-      AND table_name IN ('finance_account', 'allocation', 'payment_allocation', 'receivable',
+      AND table_name IN ('finance_account', 'allocation', 'receivable',
         'finance_event', 'credit_lot', 'refund', 'entitlement_entry')`, []);
+  assert.equal(await migrator.paymentAllocation.count(), allocationsBefore);
 
   await assert.rejects(runtime.$executeRaw`
     UPDATE payment SET verified_by = ${users.admin.id}::uuid WHERE id = ${original.id}::uuid`,
@@ -1307,6 +1341,263 @@ test('a failed verification audit rolls back the transition and allows retry wit
   await expectStatus(200, path, write);
   assert.equal((await verificationAudits(original.id)).length, 1);
   assert.equal(await verificationKeys(), keys + 1);
+});
+
+const allocationAction = 'payment.allocate';
+const allocationPath = paymentId => `${paymentPath}/${paymentId}/allocations`;
+const allocationRequest = (purchaseId, amount) => adminWrite({ purchaseId, amount });
+
+async function verifiedPayment() {
+  const { id } = await recordPaymentForVerification();
+  await expectStatus(200, verifyPaymentPath(id), adminWrite());
+  return migrator.payment.findUniqueOrThrow({ where: { id } });
+}
+
+async function allocationPurchase(overrides) {
+  const offer = await acceptanceOffer('25.00');
+  return expectStatus(201, positivePricePath, acceptanceRequest(offer, overrides));
+}
+
+async function allocationCounts() {
+  return Promise.all([
+    migrator.paymentAllocation.count(),
+    migrator.auditLog.count({ where: { action: 'PAYMENT_ALLOCATED' } }),
+    migrator.idempotencyKey.count({ where: { operation: allocationAction } }),
+  ]);
+}
+
+async function assertAllocationAudits(allocations) {
+  for (const allocation of allocations) {
+    const audits = await migrator.auditLog.findMany({
+      where: { action: 'PAYMENT_ALLOCATED', targetType: 'PAYMENT_ALLOCATION', targetId: allocation.id },
+    });
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].actorId, allocation.allocatedById);
+    assert(audits[0].requestId);
+    assert(audits[0].createdAt instanceof Date);
+    assert.deepEqual(audits[0].redactedDetails, { paymentId: allocation.paymentId, purchaseId: allocation.purchaseId });
+  }
+}
+
+test('Admin records partial allocations across purchases and spends the exact remainder without financial side effects', async () => {
+  const payment = await verifiedPayment();
+  const { purchaseId } = await allocationPurchase();
+  const complimentary = await expectStatus(201, complimentaryPath, acceptanceRequest(await acceptanceOffer()));
+  const second = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { id: complimentary.acceptanceId } });
+  const purchases = () => migrator.purchase.findMany({
+    orderBy: { id: 'asc' }, include: { acceptance: true, membership: true },
+  });
+  const beforePurchases = await purchases();
+  const counts = await allocationCounts();
+  const [{ now: before }] = await migrator.$queryRaw`SELECT clock_timestamp() AS now`;
+  const path = allocationPath(payment.id);
+  const first = await expectStatus(201, path, allocationRequest(purchaseId, '31.2'));
+  const next = await expectStatus(201, path, allocationRequest(second.purchaseId, '20'));
+  const last = await expectStatus(201, path, allocationRequest(purchaseId, '72.20'));
+  for (const [result, target, amount] of [[first, purchaseId, '31.20'], [next, second.purchaseId, '20.00'], [last, purchaseId, '72.20']]) {
+    assert.deepEqual(result, { allocationId: result.allocationId, paymentId: payment.id, purchaseId: target, amount, currency: 'SAR' });
+    const row = await runtime.paymentAllocation.findUniqueOrThrow({ where: { id: result.allocationId } });
+    assert.equal(row.purchaseId, target);
+    assert.equal(row.amount.toFixed(2), amount);
+    assert.equal(row.currency, 'SAR');
+    assert.equal(row.allocatedById, users.admin.id);
+    const [{ now: after }] = await migrator.$queryRaw`SELECT clock_timestamp() AS now`;
+    assert(row.createdAt >= before && row.createdAt <= after);
+  }
+  assert.equal((await expectStatus(409, path, allocationRequest(purchaseId, '0.01'))).code, 'PAYMENT_ALLOCATION_EXCEEDS_AVAILABLE');
+  const persisted = await migrator.paymentAllocation.findMany({ where: { paymentId: payment.id } });
+  assert.equal(persisted.length, 3);
+  const total = await migrator.paymentAllocation.aggregate({ where: { paymentId: payment.id }, _sum: { amount: true } });
+  assert(total._sum.amount.eq(payment.amount));
+  await assertAllocationAudits(persisted);
+  assert.deepEqual(await allocationCounts(), counts.map(count => count + 3));
+  assert.deepEqual(await migrator.payment.findUniqueOrThrow({ where: { id: payment.id } }), payment);
+  assert.deepEqual(await purchases(), beforePurchases);
+  assert.deepEqual(await migrator.$queryRaw`
+    SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
+      AND table_name IN ('finance_account', 'installment', 'receivable', 'finance_event',
+        'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
+  await assert.rejects(runtime.$executeRaw`UPDATE payment_allocation SET amount = 1 WHERE id = ${first.allocationId}::uuid`,
+    error => error.meta?.code === '42501');
+  await assert.rejects(runtime.$executeRaw`DELETE FROM payment_allocation WHERE id = ${first.allocationId}::uuid`,
+    error => error.meta?.code === '42501');
+});
+
+test('allocation is denied to non-Admins even with recording and legacy allocation grants', async () => {
+  const payment = await verifiedPayment();
+  const { purchaseId } = await allocationPurchase();
+  const path = allocationPath(payment.id);
+  const grantPath = `/staff-grants/${users.staff.id}`;
+  assert.equal((await expectStatus(400, grantPath + '/payment.allocate', grantOptions(true))).code, 'INVALID_STAFF_PERMISSION');
+  await expectStatus(204, grantPath + '/payment.record', grantOptions(true));
+  const legacy = await migrator.staffGrant.create({ data: {
+    staffUserId: users.staff.id, permission: 'PAYMENT_ALLOCATE', changedById: users.admin.id,
+  } });
+  try {
+    const counts = await allocationCounts();
+    const write = allocationRequest(purchaseId, '10');
+    assert.equal((await expectStatus(401, path, { ...write, access: undefined })).code, 'UNAUTHENTICATED');
+    for (const role of ['staff', 'coach', 'client']) {
+      assert.equal((await expectStatus(403, path, { ...write, access: sessions[role].accessToken })).code, 'FORBIDDEN');
+    }
+    assert.deepEqual(await allocationCounts(), counts);
+  } finally {
+    await migrator.staffGrant.delete({ where: { id: legacy.id } });
+    await expectStatus(204, grantPath + '/payment.record', grantOptions(false));
+  }
+});
+
+test('allocation rejects invalid input, missing records, unverified payments and different Client purchases', async () => {
+  const payment = await verifiedPayment();
+  const unverified = await recordPaymentForVerification();
+  const { purchaseId } = await allocationPurchase();
+  const { purchaseId: otherPurchase } = await allocationPurchase({ clientId: users.other.id });
+  const offer = await acceptanceOffer('10.00');
+  const path = allocationPath(payment.id);
+  const write = allocationRequest(purchaseId, '10');
+  const counts = await allocationCounts();
+  const purchaseCount = await migrator.purchase.count();
+  for (const [status, route, options, code] of [
+    [400, allocationPath('invalid'), write, 'INVALID_INPUT'],
+    [400, path, { ...write, key: undefined }, 'INVALID_IDEMPOTENCY_KEY'],
+    [404, allocationPath(randomUUID()), write, 'PAYMENT_NOT_FOUND'],
+    [404, path, allocationRequest(randomUUID(), '10'), 'PURCHASE_NOT_FOUND'],
+    [404, path, allocationRequest(offer.packageId, '10'), 'PURCHASE_NOT_FOUND'],
+    [404, path, allocationRequest(offer.packageVersionId, '10'), 'PURCHASE_NOT_FOUND'],
+    [409, allocationPath(unverified.id), write, 'PAYMENT_NOT_VERIFIED'],
+    [409, path, allocationRequest(otherPurchase, '10'), 'PAYMENT_PURCHASE_CLIENT_MISMATCH'],
+    [409, path, allocationRequest(purchaseId, '123.41'), 'PAYMENT_ALLOCATION_EXCEEDS_AVAILABLE'],
+  ]) {
+    const error = await expectStatus(status, route, options);
+    assert.deepEqual(Object.keys(error).sort(), ['code', 'requestId']);
+    assert.equal(error.code, code);
+  }
+  for (const body of [
+    undefined, {}, { ...write.body, purchaseId: 'invalid' },
+    ...['0', '-1', '1.001', '1e1', 10].map(amount => ({ purchaseId, amount })),
+    ...Object.entries({ currency: 'SAR', clientId: users.client.id, allocatedById: users.admin.id, createdAt: new Date().toISOString() })
+      .map(([name, value]) => ({ ...write.body, [name]: value })),
+  ]) {
+    assert.equal((await expectStatus(400, path, { ...write, body })).code, 'INVALID_INPUT');
+  }
+  assert.deepEqual(await allocationCounts(), counts);
+  assert.equal(await migrator.purchase.count(), purchaseCount);
+});
+
+test('allocation replays normalized requests and conflicts on changed payment, purchase or amount', async () => {
+  const payment = await verifiedPayment();
+  const otherPayment = await verifiedPayment();
+  const { purchaseId } = await allocationPurchase();
+  const { purchaseId: otherPurchase } = await allocationPurchase();
+  const path = allocationPath(payment.id);
+  const write = allocationRequest(purchaseId, '100');
+  const counts = await allocationCounts();
+  const [first, replay] = await Promise.all([
+    expectStatus(201, path, write),
+    expectStatus(201, allocationPath(payment.id.toUpperCase()), { ...write, body: { purchaseId: purchaseId.toUpperCase(), amount: '100.00' } }),
+  ]);
+  assert.deepEqual(replay, first);
+  for (const [route, body] of [
+    [allocationPath(otherPayment.id), write.body], [path, { ...write.body, purchaseId: otherPurchase }],
+    [path, { ...write.body, amount: '100.01' }],
+  ]) {
+    assert.equal((await expectStatus(409, route, { ...write, body })).code, 'IDEMPOTENCY_KEY_REUSED');
+  }
+  assert.deepEqual(await allocationCounts(), counts.map(count => count + 1));
+});
+
+test('concurrent Admin allocations wait on the payment row and the losing request sees the committed total', async () => {
+  const payment = await verifiedPayment();
+  const { purchaseId } = await allocationPurchase();
+  const { purchaseId: otherPurchase } = await allocationPurchase();
+  const path = allocationPath(payment.id);
+  const counts = await allocationCounts();
+  let attempts;
+  try {
+    await migrator.$transaction(async tx => {
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
+      await tx.$queryRaw`SELECT id FROM payment WHERE id = ${payment.id}::uuid FOR NO KEY UPDATE`;
+      attempts = Promise.allSettled([
+        request(path, allocationRequest(purchaseId, '80.00')),
+        request(path, { ...allocationRequest(otherPurchase, '80.00'), access: sessions.raceAdmin.accessToken }),
+      ]);
+      const deadline = Date.now() + 1200;
+      while (Date.now() < deadline) {
+        const [{ waiting, behindPaymentLock }] = await owner.$queryRaw`
+          SELECT count(*)::int AS waiting, bool_or(${pid} = ANY(pg_blocking_pids(pid))) AS "behindPaymentLock"
+          FROM pg_stat_activity
+          WHERE datname = ${databaseName} AND usename = 'studio_api'
+            AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO payment_allocation%'`;
+        if (waiting === 2 && behindPaymentLock) return;
+        await delay(15);
+      }
+      assert.fail('Both allocation inserts must wait for the payment row');
+    });
+  } finally {
+    await attempts;
+  }
+  const responses = (await attempts).map(attempt => {
+    assert.equal(attempt.status, 'fulfilled');
+    return attempt.value;
+  });
+  assert.deepEqual(responses.map(response => response.status).sort(), [201, 409]);
+  const success = await responses.find(response => response.status === 201).json();
+  assert.equal((await responses.find(response => response.status === 409).json()).code, 'PAYMENT_ALLOCATION_EXCEEDS_AVAILABLE');
+  const allocations = await migrator.paymentAllocation.findMany({ where: { paymentId: payment.id } });
+  assert.equal(allocations.length, 1);
+  assert.equal(allocations[0].id, success.allocationId);
+  assert.equal(allocations[0].allocatedById, responses[0].status === 201 ? users.admin.id : users.raceAdmin.id);
+  const total = await migrator.paymentAllocation.aggregate({ where: { paymentId: payment.id }, _sum: { amount: true } });
+  assert.equal(total._sum.amount.toFixed(2), '80.00');
+  await assertAllocationAudits(allocations);
+  assert.deepEqual(await allocationCounts(), counts.map(count => count + 1));
+});
+
+test('allocation database constraints also enforce eligibility and the aggregate limit on runtime inserts', async () => {
+  const payment = await verifiedPayment();
+  const unverified = await recordPaymentForVerification();
+  const { purchaseId } = await allocationPurchase();
+  const { purchaseId: otherPurchase } = await allocationPurchase({ clientId: users.other.id });
+  const path = allocationPath(payment.id);
+  await expectStatus(201, path, allocationRequest(purchaseId, '100'));
+  const counts = await allocationCounts();
+  const insert = (tx, id, target, amount) => tx.$executeRaw`
+    INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+    VALUES (${id}::uuid, ${target}::uuid, ${amount}::numeric, ${users.admin.id}::uuid)`;
+  for (const [id, target, amount, code] of [
+    [payment.id, purchaseId, '23.41', 'SS005'],
+    [payment.id, otherPurchase, '1', 'SS004'],
+    [unverified.id, purchaseId, '1', 'SS003'],
+    [payment.id, purchaseId, '1.001', '23514'],
+    [payment.id, purchaseId, '0', '23514'],
+  ]) {
+    await assert.rejects(insert(runtime, id, target, amount), error => error.meta?.code === code);
+  }
+  await assert.rejects(runtime.$executeRaw`
+    INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+    SELECT ${payment.id}::uuid, ${purchaseId}::uuid, 12, ${users.admin.id}::uuid
+    FROM generate_series(1, 2)`, error => error.meta?.code === 'SS005');
+  await assert.rejects(runtime.$transaction(tx => insert(tx, payment.id, purchaseId, '1'), { isolationLevel: 'RepeatableRead' }),
+    error => error.meta?.code === '0A000');
+  assert.deepEqual(await allocationCounts(), counts);
+});
+
+test('allocation rolls back on audit failure and the original key can retry', async () => {
+  const payment = await verifiedPayment();
+  const { purchaseId } = await allocationPurchase();
+  const path = allocationPath(payment.id);
+  const write = allocationRequest(purchaseId, '123.40');
+  const counts = await allocationCounts();
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_allocation_audit
+    CHECK (action <> 'PAYMENT_ALLOCATED') NOT VALID`;
+  try {
+    assert.equal((await expectStatus(500, path, write)).code, 'INTERNAL_ERROR');
+    assert.deepEqual(await allocationCounts(), counts);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_allocation_audit`;
+  }
+  await expectStatus(201, path, write);
+  assert.deepEqual(await allocationCounts(), counts.map(count => count + 1));
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {

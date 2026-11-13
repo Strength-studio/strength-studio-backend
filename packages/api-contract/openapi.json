@@ -1497,6 +1497,77 @@
           "Payments"
         ]
       }
+    },
+    "/api/v1/payments/{paymentId}/allocations": {
+      "post": {
+        "description": "Admin only. Records an allocation to an existing purchase for the same Client.",
+        "operationId": "PaymentController_allocate",
+        "parameters": [
+          {
+            "name": "paymentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllocatePaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentAllocationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Payment or purchase not found"
+          },
+          "409": {
+            "description": "Payment is ineligible, purchase ownership differs, amount exceeds available funds, or idempotency key cannot be replayed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Allocate verified payment funds to a purchase",
+        "tags": [
+          "Payments"
+        ]
+      }
     }
   },
   "info": {
@@ -2226,6 +2297,58 @@
         "required": [
           "paymentId",
           "status"
+        ]
+      },
+      "AllocatePaymentDto": {
+        "type": "object",
+        "properties": {
+          "purchaseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "string",
+            "example": "150.00",
+            "description": "Positive decimal string with at most two fractional digits."
+          }
+        },
+        "required": [
+          "purchaseId",
+          "amount"
+        ]
+      },
+      "PaymentAllocationDto": {
+        "type": "object",
+        "properties": {
+          "allocationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "purchaseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "string",
+            "example": "150.00"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "SAR"
+            ]
+          }
+        },
+        "required": [
+          "allocationId",
+          "paymentId",
+          "purchaseId",
+          "amount",
+          "currency"
         ]
       }
     }

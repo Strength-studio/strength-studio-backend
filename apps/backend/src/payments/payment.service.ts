@@ -5,7 +5,7 @@ import { audit } from '../platform/audit';
 import { Commands } from '../platform/commands';
 import { databaseTime } from '../platform/database';
 import { failure } from '../platform/http';
-import { RecordPaymentDto } from './payment.dto';
+import { AllocatePaymentDto, PaymentAllocationDto, RecordPaymentDto } from './payment.dto';
 
 const action = 'payment.record';
 
@@ -81,5 +81,43 @@ export class PaymentService {
       },
     });
     return { paymentId: outcome.reference!, status: PaymentStatus.VERIFIED };
+  }
+
+  async allocate(access: AccessContext, requestId: string, key: string | undefined, id: string,
+    dto: AllocatePaymentDto): Promise<PaymentAllocationDto> {
+    const paymentId = id.toLowerCase();
+    const purchaseId = dto.purchaseId.toLowerCase();
+    const requestedAmount = new Prisma.Decimal(dto.amount);
+    if (!requestedAmount.gt(0)) throw failure(400, 'INVALID_INPUT');
+    const amount = requestedAmount.toFixed(2);
+    const action = 'payment.allocate';
+    const outcome = await this.commands.run({
+      access, action, key, args: [paymentId, purchaseId, amount],
+      write: async tx => {
+        // The insert trigger locks the payment and checks eligibility and remaining funds.
+        const [allocation] = await tx.$queryRaw<{ id: string }[]>`
+          INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+          VALUES (${paymentId}::uuid, ${purchaseId}::uuid, ${requestedAmount}, ${access.userId}::uuid)
+          RETURNING id`.catch(error => {
+          if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2010') {
+            switch (error.meta?.code) {
+              case 'SS001': throw failure(404, 'PAYMENT_NOT_FOUND');
+              case 'SS002': throw failure(404, 'PURCHASE_NOT_FOUND');
+              case 'SS003': throw failure(409, 'PAYMENT_NOT_VERIFIED');
+              case 'SS004': throw failure(409, 'PAYMENT_PURCHASE_CLIENT_MISMATCH');
+              case 'SS005': throw failure(409, 'PAYMENT_ALLOCATION_EXCEEDS_AVAILABLE');
+            }
+          }
+          throw error;
+        });
+        await this.sessions.authorize(tx, access, [action]);
+        await audit(tx, {
+          actorId: access.userId, requestId, targetId: allocation.id, action: AuditAction.PAYMENT_ALLOCATED,
+          targetType: AuditTarget.PAYMENT_ALLOCATION, redactedDetails: { paymentId, purchaseId },
+        });
+        return { status: 201, reference: allocation.id };
+      },
+    });
+    return { allocationId: outcome.reference!, paymentId, purchaseId, amount, currency: 'SAR' };
   }
 }

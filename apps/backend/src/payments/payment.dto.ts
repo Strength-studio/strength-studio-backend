@@ -4,6 +4,7 @@ import { Transform } from 'class-transformer';
 import { Equals, IsEnum, IsISO8601, IsString, IsUUID, Matches, MaxLength, ValidateIf } from 'class-validator';
 
 const receivedInstant = /^(?!0000)\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+const sarAmount = /^(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,2})?$/;
 
 function trimmed(value: unknown) {
   return typeof value === 'string' ? value.trim() : value;
@@ -20,7 +21,7 @@ export class RecordPaymentDto {
 
   @ApiProperty({ example: '120.50', description: 'Positive decimal string with at most two fractional digits.' })
   @IsString()
-  @Matches(/^(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,2})?$/)
+  @Matches(sarAmount)
   amount!: string;
 
   @ApiProperty({ enum: ['SAR'] })
@@ -63,4 +64,32 @@ export class VerifiedPaymentDto {
 
   @ApiProperty({ enum: [PaymentStatus.VERIFIED] })
   status!: typeof PaymentStatus.VERIFIED;
+}
+
+export class AllocatePaymentDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID()
+  purchaseId!: string;
+
+  @ApiProperty({ example: '150.00', description: 'Positive decimal string with at most two fractional digits.' })
+  @IsString()
+  @Matches(sarAmount)
+  amount!: string;
+}
+
+export class PaymentAllocationDto {
+  @ApiProperty({ format: 'uuid' })
+  allocationId!: string;
+
+  @ApiProperty({ format: 'uuid' })
+  paymentId!: string;
+
+  @ApiProperty({ format: 'uuid' })
+  purchaseId!: string;
+
+  @ApiProperty({ example: '150.00' })
+  amount!: string;
+
+  @ApiProperty({ enum: ['SAR'] })
+  currency!: 'SAR';
 }
