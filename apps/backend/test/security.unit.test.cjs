@@ -68,8 +68,15 @@ test('payment.record authorizes recording alone and uses the existing Staff gran
   for (const role of [Role.STAFF, Role.COACH, Role.CLIENT]) {
     const grants = [StaffPermission.PAYMENT_RECORD];
     assert.equal(hasAction(role, grants, 'payment.record'), role === Role.STAFF);
-    assert.equal(hasAction(role, grants, 'payment.verify'), false);
     assert.equal(hasAction(role, grants, 'payment.allocate'), false);
     assert.equal(hasAction(role, grants, 'membership.activate'), false);
+  }
+});
+
+test('payment.verify authorizes only Admin and cannot be assigned as a Staff grant', () => {
+  assert.equal(hasAction(Role.ADMIN, [], 'payment.verify'), true);
+  assert.equal(staffPermissions.has('payment.verify'), false);
+  for (const role of [Role.STAFF, Role.COACH, Role.CLIENT]) {
+    assert.equal(hasAction(role, Object.values(StaffPermission), 'payment.verify'), false);
   }
 });

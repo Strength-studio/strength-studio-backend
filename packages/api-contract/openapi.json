@@ -1425,6 +1425,78 @@
           "Payments"
         ]
       }
+    },
+    "/api/v1/payments/{paymentId}/verify": {
+      "post": {
+        "description": "Admin only. Verifies an unverified receipt and records the authenticated verifier and server timestamp.",
+        "operationId": "PaymentController_verify",
+        "parameters": [
+          {
+            "name": "paymentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifiedPaymentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payment ID, body, or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Payment not found"
+          },
+          "409": {
+            "description": "Payment is not unverified or idempotency key cannot be replayed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Verify a recorded payment",
+        "tags": [
+          "Payments"
+        ]
+      }
     }
   },
   "info": {
@@ -2129,6 +2201,25 @@
             "type": "string",
             "enum": [
               "UNVERIFIED"
+            ]
+          }
+        },
+        "required": [
+          "paymentId",
+          "status"
+        ]
+      },
+      "VerifiedPaymentDto": {
+        "type": "object",
+        "properties": {
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "VERIFIED"
             ]
           }
         },

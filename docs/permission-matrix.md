@@ -22,7 +22,8 @@ This is the canonical action and resource map for the [API contract](api-contrac
 | `purchase.read`, `purchase.review`, `purchase.record` | Yes | Independent scoped reads, intent review and any separately bound preparatory recording. No formal acceptance | No | Own reads only |
 | `purchase.accept_record` (proposed dedicated action) | Formal acceptance and recording, including SAR 0 with purpose | Same named grant, excluding SAR 0. No membership activation | No | No |
 | `finance.read`, `installment.manage` | Yes | Same named grants, independently. No due-date revision through installment management | No | Own financial reads only, including credit and transaction history |
-| `payment.record`, `payment.verify` | Yes | Independent grants. Verification is initial only and awaits Admin review/authorization | No | No |
+| `payment.record` | Yes | Named grant | No | No |
+| `payment.verify` | **Admin only** | **Denied with all grants**, including legacy `payment.verify` | No | No |
 | `payment.authorize` (proposed), `payment.allocate` | Final authorization/rejection/return and manual allocation, respectively | No | No | No |
 | `payment.correction.request` (proposed) | Yes | Same named grant, request only | No | No |
 | `credit.apply`, `purchase.cancel`, `installment.revise_due_date` (proposed) | Yes | No | No | No |

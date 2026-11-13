@@ -668,7 +668,7 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 });
 
-test('payment migration preserves historical purchase records and replay from the accepted baseline', async () => {
+test('payment migrations preserve historical purchases, unverified payments and replay across upgrades', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'studio-purchase-upgrade-'));
   const legacySchema = join(scratch, 'schema.prisma');
   const { api, migration } = disposableUrls();
@@ -767,8 +767,23 @@ test('payment migration preserves historical purchase records and replay from th
     await upgradeApp.close();
     upgradeApp = undefined;
 
+    const recordingMigration = '20261112000600_payment_recording';
+    cpSync(join(prismaDirectory, 'migrations', recordingMigration), join(scratch, 'migrations', recordingMigration), { recursive: true });
+    deployMigrations(api, migration, legacySchema);
+    // The current Prisma client expects verification columns that are absent at the recording baseline.
+    const legacyPaymentId = randomUUID();
+    const [legacyPayment] = await upgradeDb.$queryRaw`
+      INSERT INTO payment (id, intake_id, client_id, recorded_by, amount, currency, method, received_at, reference, evidence)
+      VALUES (${legacyPaymentId}::uuid, ${randomUUID()}::uuid, ${client.id}::uuid, ${admin.id}::uuid,
+        75.00, 'SAR', 'BANK_TRANSFER', ${acceptedAt}, 'original reference', 'original evidence')
+      RETURNING to_jsonb(payment) AS receipt`;
+
     deployMigrations(api, migration);
     deployMigrations(api, migration);
+    const [upgradedPayment] = await upgradeDb.$queryRaw`
+      SELECT to_jsonb(payment) AS receipt FROM payment WHERE id = ${legacyPaymentId}::uuid`;
+    assert.deepEqual(upgradedPayment.receipt, { ...legacyPayment.receipt, verified_by: null, verified_at: null });
+    assert.equal(upgradedPayment.receipt.status, 'UNVERIFIED');
     const purchase = await upgradeDb.purchase.findUniqueOrThrow({
       where: { id: originalPurchase.id }, include: { acceptance: true, membership: true },
     });
@@ -804,7 +819,10 @@ test('payment migration preserves historical purchase records and replay from th
     assert.deepEqual(await Promise.all([
       upgradeDb.purchase.count(), upgradeDb.purchaseAcceptance.count(), upgradeDb.membership.count(),
       upgradeDb.auditLog.count(), upgradeDb.idempotencyKey.count(), upgradeDb.payment.count(),
-    ]), [2, 2, 1, 2, 2, 0]);
+    ]), [2, 2, 1, 2, 2, 1]);
+    const verification = await upgradedPost(`/payments/${legacyPaymentId}/verify`, {}, randomUUID());
+    assert.equal(verification.status, 200);
+    assert.deepEqual(await verification.json(), { paymentId: legacyPaymentId, status: 'VERIFIED' });
 
     // Model a future type only in this disposable database.
     await upgradeDb.$executeRaw`ALTER TYPE purchase_type ADD VALUE 'TEST_REPEATABLE'`;
@@ -989,6 +1007,8 @@ test('Admin records an immutable unverified payment with no purchase or membersh
   const payment = await migrator.payment.findUniqueOrThrow({ where: { id: result.paymentId } });
   assert.deepEqual(result, { paymentId: payment.id, status: 'UNVERIFIED' });
   assert.equal(payment.status, 'UNVERIFIED');
+  assert.equal(payment.verifiedById, null);
+  assert.equal(payment.verifiedAt, null);
   assert.equal(payment.intakeId, write.body.intakeId);
   assert.equal(payment.clientId, users.client.id);
   assert.equal(payment.recordedById, users.admin.id);
@@ -1015,7 +1035,7 @@ test('Admin records an immutable unverified payment with no purchase or membersh
         'finance_event', 'revenue', 'credit_lot', 'refund', 'entitlement_entry')`, []);
   assert.deepEqual(await migrator.$queryRaw`
     SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payment'
-      AND column_name IN ('purchase_id', 'allocated_at', 'verified_at')`, []);
+      AND column_name IN ('purchase_id', 'allocated_at')`, []);
   await assert.rejects(runtime.$executeRaw`UPDATE payment SET amount = 1 WHERE id = ${payment.id}::uuid`,
     error => error.meta?.code === '42501');
   await assert.rejects(runtime.$executeRaw`DELETE FROM payment WHERE id = ${payment.id}::uuid`,
@@ -1041,9 +1061,7 @@ test('only Admin and Staff with the current payment.record grant may record paym
   assert.equal(payment.status, 'UNVERIFIED');
   assert.equal(payment.reference, null);
   assert.equal(payment.evidence, null);
-  for (const suffix of ['verify', 'allocate']) {
-    await expectStatus(404, `${paymentPath}/${payment.id}/${suffix}`, { ...write, body: {} });
-  }
+  await expectStatus(404, `${paymentPath}/${payment.id}/allocate`, { ...write, body: {} });
   await expectStatus(204, `/staff-grants/${users.staff.id}/payment.record`, grantOptions(false));
   await expectStatus(403, paymentPath, write);
   assert.deepEqual(await paymentCounts(), before.map(count => count + 1));
@@ -1117,6 +1135,178 @@ test('payment audit failure rolls back the record and leaves its idempotency key
   }
   await expectStatus(201, paymentPath, write);
   assert.deepEqual(await paymentCounts(), before.map(count => count + 1));
+});
+
+const verifyPaymentAction = 'payment.verify';
+const verifyPaymentPath = id => `${paymentPath}/${id}/verify`;
+
+async function recordPaymentForVerification() {
+  const { paymentId } = await expectStatus(201, paymentPath, paymentRequest());
+  return migrator.payment.findUniqueOrThrow({ where: { id: paymentId } });
+}
+
+function verificationAudits(id) {
+  return migrator.auditLog.findMany({ where: { action: 'PAYMENT_VERIFIED', targetType: 'PAYMENT', targetId: id } });
+}
+
+function verificationKeys() {
+  return migrator.idempotencyKey.count({ where: { operation: verifyPaymentAction } });
+}
+
+test('Admin verifies an existing payment and writes one audit without changing receipt or purchase state', async () => {
+  const recording = paymentRequest();
+  const receipt = await expectStatus(201, paymentPath, recording);
+  const original = await migrator.payment.findUniqueOrThrow({ where: { id: receipt.paymentId } });
+  const path = verifyPaymentPath(original.id);
+  await expectStatus(201, positivePricePath, acceptanceRequest(await acceptanceOffer('123.40')));
+  await expectStatus(201, complimentaryPath, acceptanceRequest(await acceptanceOffer()));
+  const purchases = () => migrator.purchase.findMany({
+    orderBy: { id: 'asc' }, include: { acceptance: true, membership: true },
+  });
+  const purchaseSnapshot = await purchases();
+  assert(purchaseSnapshot.some(purchase => purchase.type === 'POSITIVE_PRICE'));
+  assert(purchaseSnapshot.some(purchase => purchase.membership?.status === 'PENDING_ACTIVATION'));
+  const paymentsBefore = await paymentCounts();
+  const [{ now: before }] = await migrator.$queryRaw`SELECT clock_timestamp() AS now`;
+  const write = { ...adminWrite(), access: sessions.raceAdmin.accessToken };
+  const result = await expectStatus(200, path, write);
+  const [{ now: after }] = await migrator.$queryRaw`SELECT clock_timestamp() AS now`;
+  const payment = await migrator.payment.findUniqueOrThrow({ where: { id: original.id } });
+  assert.deepEqual(result, { paymentId: original.id, status: 'VERIFIED' });
+  assert.deepEqual(payment, { ...original, status: 'VERIFIED', verifiedById: users.raceAdmin.id, verifiedAt: payment.verifiedAt });
+  assert(payment.verifiedAt instanceof Date && payment.verifiedAt >= before && payment.verifiedAt <= after);
+  const audits = await verificationAudits(original.id);
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].actorId, users.raceAdmin.id);
+  assert(audits[0].requestId);
+  assert(audits[0].createdAt >= before && audits[0].createdAt <= after);
+  assert.deepEqual(audits[0].redactedDetails, {});
+  assert.deepEqual(await expectStatus(201, paymentPath, recording), receipt);
+  assert.deepEqual(await purchases(), purchaseSnapshot);
+  assert.deepEqual(await paymentCounts(), paymentsBefore);
+  assert.deepEqual(await migrator.$queryRaw`
+    SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
+      AND table_name IN ('finance_account', 'allocation', 'payment_allocation', 'receivable',
+        'finance_event', 'credit_lot', 'refund', 'entitlement_entry')`, []);
+
+  await assert.rejects(runtime.$executeRaw`
+    UPDATE payment SET verified_by = ${users.admin.id}::uuid WHERE id = ${original.id}::uuid`,
+    error => error.meta?.code === '23514');
+  await assert.rejects(runtime.$executeRaw`
+    UPDATE payment SET status = 'UNVERIFIED', verified_at = NULL, verified_by = NULL WHERE id = ${original.id}::uuid`,
+    error => error.meta?.code === '23514');
+  await assert.rejects(runtime.$executeRaw`
+    INSERT INTO payment (intake_id, client_id, recorded_by, amount, currency, method, received_at, status)
+    VALUES (${randomUUID()}::uuid, ${original.clientId}::uuid, ${users.admin.id}::uuid, 1, 'SAR', 'CASH',
+      ${original.receivedAt}, 'VERIFIED')`,
+    error => error.meta?.code === '23514' && error.meta.message.includes('payment_verification_check'));
+  await assert.rejects(runtime.$executeRaw`
+    INSERT INTO payment (intake_id, client_id, recorded_by, amount, currency, method, received_at, status, verified_by, verified_at)
+    VALUES (${randomUUID()}::uuid, ${original.clientId}::uuid, ${users.admin.id}::uuid, 1, 'SAR', 'CASH',
+      clock_timestamp(), 'VERIFIED', ${users.admin.id}::uuid, clock_timestamp())`, error => error.meta?.code === '42501');
+  assert.deepEqual(await migrator.$queryRaw`
+    SELECT role, has_any_column_privilege(role, 'public.payment', 'UPDATE') AS can_update
+    FROM (VALUES ('studio_reporting'), ('studio_worker')) AS roles(role)`,
+  [{ role: 'studio_reporting', can_update: false }, { role: 'studio_worker', can_update: false }]);
+});
+
+test('verification denies unauthenticated users and all non-Admin roles including Staff with legacy grants', async () => {
+  const original = await recordPaymentForVerification();
+  const path = verifyPaymentPath(original.id);
+  const grantPath = `/staff-grants/${users.staff.id}`;
+  assert.equal((await expectStatus(400, grantPath + '/payment.verify', grantOptions(true))).code, 'INVALID_STAFF_PERMISSION');
+  await expectStatus(204, grantPath + '/payment.record', grantOptions(true));
+  const legacyGrant = await migrator.staffGrant.create({ data: {
+    staffUserId: users.staff.id, permission: 'PAYMENT_VERIFY', changedById: users.admin.id,
+  } });
+  try {
+    const keys = await verificationKeys();
+    const write = adminWrite({});
+    assert.equal((await expectStatus(401, path, { ...write, access: undefined })).code, 'UNAUTHENTICATED');
+    for (const role of ['staff', 'coach', 'client']) {
+      assert.equal((await expectStatus(403, path, { ...write, access: sessions[role].accessToken })).code, 'FORBIDDEN');
+    }
+    assert.deepEqual(await migrator.payment.findUniqueOrThrow({ where: { id: original.id } }), original);
+    assert.deepEqual(await verificationAudits(original.id), []);
+    assert.equal(await verificationKeys(), keys);
+  } finally {
+    await migrator.staffGrant.delete({ where: { id: legacyGrant.id } });
+    await expectStatus(204, grantPath + '/payment.record', grantOptions(false));
+  }
+});
+
+test('invalid verification requests leave the payment, audit and idempotency state untouched', async () => {
+  const original = await recordPaymentForVerification();
+  const path = verifyPaymentPath(original.id);
+  const keys = await verificationKeys();
+  const write = adminWrite({});
+  assert.equal((await expectStatus(404, verifyPaymentPath(randomUUID()), write)).code, 'PAYMENT_NOT_FOUND');
+  assert.equal((await expectStatus(400, verifyPaymentPath('invalid-id'), write)).code, 'INVALID_INPUT');
+  assert.equal((await expectStatus(400, path, { ...write, key: undefined })).code, 'INVALID_IDEMPOTENCY_KEY');
+  for (const body of [{ verifiedBy: users.raceAdmin.id }, { verifiedAt: new Date().toISOString() }, []]) {
+    assert.equal((await expectStatus(400, path, { ...write, body })).code, 'INVALID_INPUT');
+  }
+  assert.deepEqual(await migrator.payment.findUniqueOrThrow({ where: { id: original.id } }), original);
+  assert.deepEqual(await verificationAudits(original.id), []);
+  assert.equal(await verificationKeys(), keys);
+});
+
+test('verification replays the same command and conflicts on a changed payment ID or new key', async () => {
+  const original = await recordPaymentForVerification();
+  const other = await recordPaymentForVerification();
+  const path = verifyPaymentPath(original.id);
+  const write = adminWrite({});
+  const keys = await verificationKeys();
+  const [result, replay] = await Promise.all([expectStatus(200, path, write), expectStatus(200, path, write)]);
+  assert.deepEqual(replay, result);
+  assert.deepEqual(await expectStatus(200, verifyPaymentPath(original.id.toUpperCase()), write), result);
+  assert.equal((await expectStatus(409, verifyPaymentPath(other.id), write)).code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.equal((await expectStatus(409, path, adminWrite({}))).code, 'PAYMENT_NOT_UNVERIFIED');
+  assert.deepEqual(await migrator.payment.findUniqueOrThrow({ where: { id: other.id } }), other);
+  assert.deepEqual(await verificationAudits(other.id), []);
+  assert.equal((await verificationAudits(original.id)).length, 1);
+  assert.equal(await verificationKeys(), keys + 1);
+});
+
+test('concurrent verification by different Admins commits only the winning transition and audit', async () => {
+  const original = await recordPaymentForVerification();
+  const path = verifyPaymentPath(original.id);
+  const keys = await verificationKeys();
+  const responses = await Promise.all([
+    request(path, adminWrite({})),
+    request(path, { ...adminWrite({}), access: sessions.raceAdmin.accessToken }),
+  ]);
+  assert.deepEqual(responses.map(res => res.status).sort(), [200, 409]);
+  const winner = responses[0].status === 200 ? users.admin : users.raceAdmin;
+  for (const res of responses) {
+    const body = await res.json();
+    if (res.status === 200) assert.deepEqual(body, { paymentId: original.id, status: 'VERIFIED' });
+    else assert.equal(body.code, 'PAYMENT_NOT_UNVERIFIED');
+  }
+  const payment = await migrator.payment.findUniqueOrThrow({ where: { id: original.id } });
+  assert.equal(payment.verifiedById, winner.id);
+  assert.deepEqual((await verificationAudits(original.id)).map(row => row.actorId), [winner.id]);
+  assert.equal(await verificationKeys(), keys + 1);
+});
+
+test('a failed verification audit rolls back the transition and allows retry with the same key', async () => {
+  const original = await recordPaymentForVerification();
+  const path = verifyPaymentPath(original.id);
+  const keys = await verificationKeys();
+  const write = adminWrite({});
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_verification_audit
+    CHECK (action <> 'PAYMENT_VERIFIED') NOT VALID`;
+  try {
+    assert.equal((await expectStatus(500, path, write)).code, 'INTERNAL_ERROR');
+    assert.deepEqual(await migrator.payment.findUniqueOrThrow({ where: { id: original.id } }), original);
+    assert.deepEqual(await verificationAudits(original.id), []);
+    assert.equal(await verificationKeys(), keys);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_verification_audit`;
+  }
+  await expectStatus(200, path, write);
+  assert.equal((await verificationAudits(original.id)).length, 1);
+  assert.equal(await verificationKeys(), keys + 1);
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {

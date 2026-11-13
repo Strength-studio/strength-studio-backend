@@ -53,6 +53,14 @@ export class RecordedPaymentDto {
   @ApiProperty({ format: 'uuid' })
   paymentId!: string;
 
-  @ApiProperty({ enum: PaymentStatus })
-  status!: PaymentStatus;
+  @ApiProperty({ enum: [PaymentStatus.UNVERIFIED] })
+  status!: typeof PaymentStatus.UNVERIFIED;
+}
+
+export class VerifiedPaymentDto {
+  @ApiProperty({ format: 'uuid' })
+  paymentId!: string;
+
+  @ApiProperty({ enum: [PaymentStatus.VERIFIED] })
+  status!: typeof PaymentStatus.VERIFIED;
 }

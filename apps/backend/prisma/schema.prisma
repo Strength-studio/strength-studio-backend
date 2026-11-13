@@ -81,6 +81,7 @@ enum AuditAction {
   CATALOG_REFERENCE_CHANGED
   PURCHASE_ACCEPTED_RECORDED
   PAYMENT_RECORDED
+  PAYMENT_VERIFIED
 
   @@map("audit_action")
 }
@@ -117,7 +118,8 @@ model User {
   audit           AuditLog[]
   retries         IdempotencyKey[]
   purchases       Purchase[]
-  recordedPayments Payment[]
+  recordedPayments Payment[]     @relation("PaymentRecorder")
+  verifiedPayments Payment[]     @relation("PaymentVerifier")
 
   @@map("app_user")
 }
@@ -406,6 +408,7 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   UNVERIFIED
+  VERIFIED
 
   @@map("payment_status")
 }
@@ -415,16 +418,19 @@ model Payment {
   intakeId     String        @unique @map("intake_id") @db.Uuid
   clientId     String        @map("client_id") @db.Uuid
   recordedById String        @map("recorded_by") @db.Uuid
+  verifiedById String?       @map("verified_by") @db.Uuid
   amount       Decimal       @db.Decimal(19, 4)
   currency     String        @db.VarChar(3)
   method       PaymentMethod
   status       PaymentStatus @default(UNVERIFIED)
   receivedAt   DateTime      @map("received_at") @db.Timestamptz(6)
   createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  verifiedAt   DateTime?     @map("verified_at") @db.Timestamptz(6)
   reference    String?       @db.VarChar(200)
   evidence     String?       @db.VarChar(2000)
   client       ClientProfile @relation(fields: [clientId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
-  recordedBy   User          @relation(fields: [recordedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  recordedBy   User          @relation("PaymentRecorder", fields: [recordedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  verifiedBy   User?         @relation("PaymentVerifier", fields: [verifiedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([clientId])
   @@index([recordedById])

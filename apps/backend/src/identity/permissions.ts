@@ -2,18 +2,18 @@ import { Role, StaffPermission } from '@prisma/client';
 
 export type Action = 'account.self' | 'client.manage' | 'user.manage' | 'staff.grant.manage'
   | 'studio.configure' | 'membership.activate' | 'membership.activate_exception' | 'commission.read'
-  | 'catalog.read' | 'catalog.manage' | 'audit.read' | 'purchase.accept_record' | 'payment.record';
+  | 'catalog.read' | 'catalog.manage' | 'audit.read' | 'purchase.accept_record' | 'payment.record' | 'payment.verify';
 
 export const staffPermissions = new Map(
   Object.values(StaffPermission)
-    .filter(value => value !== StaffPermission.MEMBERSHIP_ACTIVATE)
+    .filter(value => value !== StaffPermission.MEMBERSHIP_ACTIVATE && value !== StaffPermission.PAYMENT_VERIFY)
     .map(value => [value.toLowerCase().replaceAll('_', '.'), value]),
 );
 
 const adminActions = new Set<Action>([
   'account.self', 'client.manage', 'user.manage', 'staff.grant.manage', 'studio.configure',
   'membership.activate', 'membership.activate_exception', 'commission.read',
-  'catalog.read', 'catalog.manage', 'audit.read', 'purchase.accept_record', 'payment.record',
+  'catalog.read', 'catalog.manage', 'audit.read', 'purchase.accept_record', 'payment.record', 'payment.verify',
 ]);
 
 const staffActions = new Set<Action>(['client.manage', 'catalog.read', 'catalog.manage', 'audit.read', 'payment.record']);

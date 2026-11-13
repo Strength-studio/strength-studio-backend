@@ -54,4 +54,32 @@ export class PaymentService {
     });
     return { paymentId: outcome.reference!, status: PaymentStatus.UNVERIFIED };
   }
+
+  async verify(access: AccessContext, requestId: string, key: string | undefined, id: string) {
+    const paymentId = id.toLowerCase();
+    const action = 'payment.verify';
+    const outcome = await this.commands.run({
+      access, action, key, args: [paymentId],
+      write: async tx => {
+        const [payment] = await tx.$queryRaw<{ status: PaymentStatus }[]>`
+          SELECT status FROM payment WHERE id = ${paymentId}::uuid FOR UPDATE`;
+        // Recheck authorization after waiting for a competing verification.
+        await this.sessions.authorize(tx, access, [action]);
+        if (!payment) throw failure(404, 'PAYMENT_NOT_FOUND');
+        if (payment.status !== PaymentStatus.UNVERIFIED) throw failure(409, 'PAYMENT_NOT_UNVERIFIED');
+        const verifiedAt = await databaseTime(tx);
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: { status: PaymentStatus.VERIFIED, verifiedById: access.userId, verifiedAt },
+          select: { id: true },
+        });
+        await audit(tx, {
+          actorId: access.userId, requestId, targetId: paymentId, action: AuditAction.PAYMENT_VERIFIED,
+          targetType: AuditTarget.PAYMENT,
+        });
+        return { status: 200, reference: paymentId };
+      },
+    });
+    return { paymentId: outcome.reference!, status: PaymentStatus.VERIFIED };
+  }
 }
