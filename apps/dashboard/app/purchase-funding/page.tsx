@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
-import { accessCookie, api } from '../../lib/session';
+import { redirect } from 'next/navigation';
+import { accessCookie, api, refreshCookie } from '../../lib/session';
 import { Icon } from '../catalog/ui';
 import { ClientHistoryBoundary } from '../clients/history-boundary';
 import { FundingViewer } from './viewer';
@@ -7,16 +8,20 @@ import { FundingViewer } from './viewer';
 export const metadata = { title: 'Purchase funding | Strength Studio', referrer: 'no-referrer' };
 
 async function fundingAccess() {
-  const token = (await cookies()).get(accessCookie)?.value;
+  const session = await cookies();
+  const token = session.get(accessCookie)?.value;
+  if (!token && session.has(refreshCookie)) redirect('/?session=expired');
   if (!token) return 'Sign in to continue.';
+  let response: Response;
   try {
-    const response = await api('me', 'GET', { token });
-    if (response.status === 401) return 'Your session expired. Sign in or restore your session.';
-    if (response.ok) {
-      return (await response.json()).role === 'ADMIN' ? undefined : 'Your account does not have access to Purchase funding.';
-    }
+    response = await api('me', 'GET', { token });
   } catch {
-    // Use the same unavailable state for failed connections and unexpected responses.
+    return 'Purchase funding is temporarily unavailable.';
+  }
+  if (response.status === 401) redirect('/?session=expired');
+  if (response.ok) {
+    const account = await response.json().catch(() => null);
+    if (account) return account.role === 'ADMIN' ? undefined : 'Your account does not have access to Purchase funding.';
   }
   return 'Purchase funding is temporarily unavailable.';
 }

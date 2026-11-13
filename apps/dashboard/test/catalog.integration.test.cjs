@@ -609,6 +609,17 @@ test('Purchase funding page and relay enforce Admin access and keep credentials 
       ]) assert.deepEqual(await relay(actor, status, fundingRoute(id)), { code });
     }
   }
+  const admin = await signIn('admin');
+  const refresh = admin.cookie.split('; ').find(pair => pair.startsWith('__Host-ss_refresh='));
+  for (const cookie of [refresh, '__Host-ss_access=expired; ' + refresh]) {
+    const page = await fetch(origin + fundingPage, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(page.status, 307);
+    assert.equal(page.headers.get('location'), '/?session=expired');
+    assert.match(page.headers.get('cache-control'), /no-store/);
+    const body = await page.text();
+    assert.doesNotMatch(body, /name="purchaseId"|Funding summary/);
+    assert(!body.includes(refresh));
+  }
 });
 
 test('Purchase funding relay forwards only the exact GET route with a valid UUID', async () => {
@@ -735,12 +746,25 @@ test('Purchase funding viewer validates input, displays results, and handles ser
     assert(browser.lifecycle.filter(event => event.event === 'pageshow' && new URL(event.url).pathname === fundingPage)
       .every(event => !event.visible), 'restored history must conceal the previous funding result');
 
-    for (const pair of session.cookie.split('; ')) await browser.setCookie(origin, pair);
+    // Use a separate Admin session so restoring it cannot rotate the shared fixture's refresh token.
+    const expiring = await login('admin');
+    for (const pair of expiring.cookie.split('; ')) await browser.setCookie(origin, pair);
     await browser.go(fundingPage);
     await browser.until(`document.querySelector('input[name=purchaseId]:enabled')`, 'authorized form before expiry');
+    await submit(ids.full);
+    await browser.until(`document.querySelector('.funding-summary')?.textContent.includes("${ids.full}")`, 'funding result before expiry');
     await browser.setCookie(origin, '__Host-ss_access=expired');
     await submit(ids.full);
-    await browser.until(alert('Your session expired. Sign in or restore your session.'), '401 session-expired state');
+    await browser.until(`location.pathname === '/' && location.search === '?session=expired'
+      && document.querySelector('form [name=email]')
+      && document.querySelector('[role=status]')?.textContent.includes('Your session expired. Sign in or restore your session.')
+      && [...document.querySelectorAll('button')].some(button => button.textContent === 'Restore existing session')`,
+      '401 returns to dashboard sign-in and session restoration');
+    assert(browser.responses.some(response => response.url === origin + '/api/studio/v1/' + fundingRoute(ids.full) && response.status === 401));
+    assert.equal(await browser.evaluate('document.querySelector(".funding-summary, input[name=purchaseId]") === null'), true);
+    await browser.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Restore existing session').click(); true`);
+    await browser.until(`document.querySelector('[aria-label="Sign out"]') && document.querySelector('nav a[href="${fundingPage}"]')`,
+      'existing session restoration returns to Admin Catalog');
     assert.equal(await browser.evaluate('document.querySelector(".funding-summary, input[name=purchaseId]") === null'), true);
   });
 });

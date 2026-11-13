@@ -21,8 +21,10 @@ export default function Home() {
   }
 
   useEffect(() => {
-    void readAccount().catch(() => setMessage('The API is unavailable.'));
-  }, []);
+    void readAccount().then(status => {
+      if (status === 401 && new URLSearchParams(window.location.search).get('session') === 'expired') expired();
+    }).catch(() => setMessage('The API is unavailable.'));
+  }, [expired]);
 
   async function run(operation: () => Promise<void>) {
     setBusy(true);

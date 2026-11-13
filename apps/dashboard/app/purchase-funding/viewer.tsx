@@ -13,7 +13,6 @@ const fundingLabels = {
 
 const messages: Record<number, string> = {
   400: 'Enter a valid Purchase UUID.',
-  401: 'Your session expired. Sign in or restore your session.',
   403: 'Your account does not have access to Purchase funding.',
   404: 'This Purchase could not be found.',
   409: 'Allocations exceed the frozen Purchase price. Funding information cannot be displayed.',
@@ -45,6 +44,10 @@ export function FundingViewer() {
       setLookup({ state: 'loaded', funding });
     } catch (error) {
       const status = error instanceof CatalogError ? error.status : 503;
+      if (status === 401) {
+        window.location.replace('/?session=expired');
+        return;
+      }
       setLookup({ state: 'error', status, retry: status >= 500 || status === 429 ? () => void load(id) : undefined });
     }
   }
@@ -56,7 +59,7 @@ export function FundingViewer() {
   }
 
   const error = lookup.state === 'error' ? lookup : undefined;
-  const denied = error?.status === 401 || error?.status === 403;
+  const denied = error?.status === 403;
   const funding = lookup.state === 'loaded' ? lookup.funding : undefined;
 
   return <>
