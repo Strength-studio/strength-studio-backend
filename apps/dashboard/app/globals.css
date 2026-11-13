@@ -172,6 +172,14 @@ textarea { resize: vertical; }
 .entry-card h1 { font-size: 1.85rem; }
 .entry-card form { display: grid; gap: 12px; }
 
+.funding-workspace { max-width: 920px; margin-inline: 0; }
+.funding-lookup, .funding-summary { padding: 18px; }
+.funding-lookup { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.funding-lookup label { flex: 1 1 300px; min-width: 0; display: grid; gap: 5px; font-weight: 640; }
+.funding-lookup input { width: 100%; }
+.funding-summary .terms { margin-top: 14px; }
+.funding-summary .terms > div:first-child { flex-basis: 100%; }
+
 @media (max-width: 1050px) {
   .workspace { grid-template-columns: 185px minmax(0, 1fr); }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -293,6 +293,7 @@ export function CatalogDashboard({ account, busy, sessionNotice, onSignOut, onEx
           aria-current={item === currentTab ? 'page' : undefined} onClick={() => { setTab(item); setNotice(''); }}>
           <Icon name={tabs[item].icon} />{tabs[item].name}</button>)}
         {clientAccess.value && <Link href="/clients" prefetch={false}><Icon name="users" /> Clients</Link>}
+        {admin && <a href="/purchase-funding"><Icon name="file" /> Purchase funding</a>}
       </nav>
       <div className="sidebar-foot"><span className="status-dot" /> Studio dashboard</div>
     </aside>

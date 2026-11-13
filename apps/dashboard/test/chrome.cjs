@@ -117,6 +117,13 @@ async function withChrome(origin, clientMarker, run) {
     })()` });
     await run({
       go: path => call('Page.navigate', { url: origin + path }),
+      setCookie: async (url, pair) => {
+        const separator = pair.indexOf('=');
+        const { success } = await call('Network.setCookie', {
+          url, name: pair.slice(0, separator), value: pair.slice(separator + 1), secure: true, httpOnly: true, path: '/',
+        });
+        if (!success) throw new Error('Chrome rejected the session cookie');
+      },
       blockResources: urls => call('Network.setBlockedURLs', { urls }),
       traverse: async offset => {
         const { currentIndex, entries } = await call('Page.getNavigationHistory');

@@ -536,9 +536,219 @@ test('real catalog commands preserve roles, history and conflict codes through t
   assert((await relay(admin, 200, path + '/management')).items.some(item => item.sessionTypes.some(type => type.id === sessionTypeId)));
 });
 
+const fundingPage = '/purchase-funding';
+const fundingRoute = id => 'purchases/' + id + '/funding';
+
+async function fundingFixtures() {
+  const [admin, client] = await Promise.all([
+    fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email('admin') } }),
+    fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email('client') } }),
+  ]);
+  const purchases = {};
+  for (const [name, price, allocated] of [
+    ['unfunded', '1250.50', null], ['partial', '500.00', '200.25'], ['full', '500.00', '500.00'],
+    ['complimentary', '0.00', null], ['overfunded', '100.00', '100.01'], ['malformed', 500, null],
+  ]) {
+    const { id: packageVersionId } = await fixture.packageVersion.create({ data: {
+      package: { create: { code: 'FUND-' + randomBytes(5).toString('hex').toUpperCase() } }, version: 1,
+      name: 'Funding fixture', description: '', price, kind: 'TIME', validityDays: 30,
+    } });
+    const purchase = await fixture.purchase.create({ data: {
+      clientId: client.id, packageVersionId, type: name === 'complimentary' ? 'COMPLIMENTARY' : 'POSITIVE_PRICE',
+      acceptedById: admin.id, acceptedAt: new Date(), terms: { price, currency: 'SAR' },
+    } });
+    purchases[name] = purchase.id;
+    if (allocated) {
+      const payment = await fixture.payment.create({ data: {
+        intakeId: randomUUID(), clientId: client.id, recordedById: admin.id, amount: allocated, currency: 'SAR',
+        method: 'CASH', status: 'VERIFIED', receivedAt: new Date(), verifiedById: admin.id, verifiedAt: new Date(),
+      } });
+      await fixture.$executeRaw`
+        INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+        VALUES (${payment.id}::uuid, ${purchase.id}::uuid, ${allocated}::numeric, ${admin.id}::uuid)`;
+    }
+  }
+  return purchases;
+}
+
+test('Purchase funding page and relay enforce Admin access and keep credentials server-side', async () => {
+  const { unfunded, complimentary, overfunded, malformed } = await fundingFixtures();
+  const staffUser = await fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email('reader') } });
+  const adminUser = await fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email('admin') } });
+  await fixture.staffGrant.createMany({ data: ['PURCHASE_READ', 'FINANCE_READ'].map(permission => ({
+    permission, staffUserId: staffUser.id, changedById: adminUser.id,
+  })) });
+  for (const [role, message] of [
+    ['admin', null], ['noGrant', 'Your account does not have access'],
+    ['reader', 'Your account does not have access'],
+    ['coach', 'Your account does not have access'], ['client', 'Your account does not have access'], [null, 'Sign in to continue'],
+  ]) {
+    const actor = role ? await signIn(role) : { cookie: '' };
+    const page = await fetch(origin + fundingPage, { headers: { cookie: actor.cookie } });
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('cache-control'), /no-store/);
+    const html = await page.text();
+    assert.doesNotMatch(html, /accessToken|refreshToken|__Host-ss_/);
+    for (const cookie of actor.cookie.split('; ').filter(Boolean)) assert(!html.includes(cookie.split('=')[1]));
+    if (message) {
+      assert(html.includes(message));
+      assert.doesNotMatch(html, /name="purchaseId"/);
+      assert.equal((await relay(actor, role ? 403 : 401, fundingRoute(unfunded))).code, role ? 'FORBIDDEN' : 'UNAUTHENTICATED');
+    } else {
+      assert.match(html, /name="purchaseId"/);
+      assert.deepEqual(await relay(actor, 200, fundingRoute(unfunded.toUpperCase())), {
+        purchaseId: unfunded, currency: 'SAR', purchasePrice: '1250.50', allocatedAmount: '0.00',
+        remainingAmount: '1250.50', fundingStatus: 'UNFUNDED',
+      });
+      assert.deepEqual(await relay(actor, 200, fundingRoute(complimentary)), {
+        purchaseId: complimentary, currency: 'SAR', purchasePrice: '0.00', allocatedAmount: '0.00',
+        remainingAmount: '0.00', fundingStatus: 'FULLY_FUNDED',
+      });
+      for (const [status, id, code] of [
+        [404, randomUUID(), 'PURCHASE_NOT_FOUND'], [409, overfunded, 'PURCHASE_OVERFUNDED'], [500, malformed, 'INTERNAL_ERROR'],
+      ]) assert.deepEqual(await relay(actor, status, fundingRoute(id)), { code });
+    }
+  }
+});
+
+test('Purchase funding relay forwards only the exact GET route with a valid UUID', async () => {
+  const admin = await signIn('admin');
+  const id = randomUUID();
+  const route = fundingRoute(id);
+  const before = upstreamRequests;
+  for (const method of ['HEAD', 'OPTIONS', 'POST', 'PATCH', 'PUT', 'DELETE']) {
+    await relay(admin, 405, route, { method });
+    assert.deepEqual(await relay(admin, 404, 'purchases/positive-price', { method }),
+      method === 'HEAD' ? null : { code: 'NOT_FOUND' });
+  }
+  for (const path of ['purchases', 'purchases/' + id, route + '/details', 'purchases/' + id + '/allocate']) {
+    assert.deepEqual(await relay(admin, 404, path), { code: 'NOT_FOUND' });
+  }
+  for (const path of [fundingRoute('bad-id'), route + '?unexpected=1']) {
+    assert.deepEqual(await relay(admin, 400, path), { code: 'INVALID_INPUT' });
+  }
+  assert.equal(upstreamRequests, before);
+  const staff = await signIn('noGrant');
+  const credential = admin.cookie.split('; ').find(cookie => cookie.startsWith('__Host-ss_access=')).split('=')[1];
+  assert.deepEqual(await relay(staff, 403, route, { headers: { Authorization: 'Bearer ' + credential } }), { code: 'FORBIDDEN' });
+  assert.equal(upstreamRequests - before, 1);
+});
+
+test('Purchase funding viewer validates input, displays results, and handles service and session errors', browserTest, async () => {
+  const ids = await fundingFixtures();
+  await withChrome(origin, ids.full, async browser => {
+    // Authenticate in the browser using a fixture session, without adding another API login to the suite's shared rate limit.
+    const session = await signIn('admin');
+    await browser.go('/');
+    for (const pair of session.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/');
+    await browser.until(`document.querySelector('nav a[href="${fundingPage}"]')`, 'Admin funding navigation');
+    await browser.evaluate(`document.querySelector('nav a[href="${fundingPage}"]').click(); true`);
+    await browser.until(`location.pathname === "${fundingPage}" && document.querySelector('input[name=purchaseId]:enabled')`, 'funding form');
+
+    const alert = text => `document.querySelector('[role=alert]')?.textContent.includes(${JSON.stringify(text)})`;
+    const submit = id => browser.evaluate(`(() => {
+      const input = document.querySelector('input[name=purchaseId]');
+      input.value = ${JSON.stringify(id)};
+      input.form.requestSubmit();
+      return true;
+    })()`);
+    const before = upstreamRequests;
+    await submit('invalid');
+    await browser.until(alert('Enter a valid Purchase UUID.'), 'client-side UUID validation');
+    assert.equal(upstreamRequests, before);
+    assert(!browser.responses.some(response => new URL(response.url).pathname.includes('/api/studio/v1/purchases/')));
+
+    await browser.evaluate(`(() => {
+      window.originalFundingFetch = window.fetch;
+      window.fetch = (...args) => typeof args[0] === 'string' && args[0].startsWith('/api/studio/v1/purchases/')
+        ? new Promise((resolve, reject) => { window.releaseFunding = () => window.originalFundingFetch(...args).then(resolve, reject); })
+        : window.originalFundingFetch(...args);
+      return true;
+    })()`);
+    await submit(' ' + ids.unfunded.toUpperCase() + ' ');
+    await browser.until(`document.querySelector('form[aria-busy=true]') && document.querySelector('[role=status]').textContent.includes('Loading Purchase funding')`, 'loading state');
+    assert.equal(await browser.evaluate('document.querySelector(".funding-summary") === null'), true);
+    await browser.evaluate('window.fetch = window.originalFundingFetch; window.releaseFunding(); true');
+
+    const fields = () => browser.evaluate(`Object.fromEntries([...document.querySelectorAll('.funding-summary dl > div')]
+      .map(row => [row.querySelector('dt').textContent, row.querySelector('dd').textContent.trim()]))`);
+    for (const [name, price, allocated, remaining, status] of [
+      ['unfunded', '1,250.50', '0.00', '1,250.50', 'Unfunded'],
+      ['partial', '500.00', '200.25', '299.75', 'Partially funded'],
+      ['full', '500.00', '500.00', '0.00', 'Fully funded'],
+      ['complimentary', '0.00', '0.00', '0.00', 'Fully funded'],
+    ]) {
+      if (name !== 'unfunded') await submit(ids[name]);
+      await browser.until(`document.querySelector('.funding-summary')?.textContent.includes("${ids[name]}")`, name + ' result');
+      assert.deepEqual(await fields(), {
+        'Purchase ID': ids[name], 'Purchase price': 'SAR ' + price, 'Allocated amount': 'SAR ' + allocated,
+        'Remaining amount': 'SAR ' + remaining, 'Funding status': status,
+      });
+      assert(browser.responses.some(response => response.url === origin + '/api/studio/v1/' + fundingRoute(ids[name]) && response.status === 200));
+    }
+
+    for (const [id, message] of [
+      [randomUUID(), 'This Purchase could not be found.'],
+      [ids.overfunded, 'Allocations exceed the frozen Purchase price.'],
+      [ids.malformed, 'Purchase funding could not be loaded.'],
+    ]) {
+      await submit(id);
+      await browser.until(alert(message), message);
+      assert.equal(await browser.evaluate('document.querySelector(".funding-summary") === null'), true);
+    }
+
+    for (const [mockFetch, message] of [
+      ["async () => Response.json({ code: 'INVALID_INPUT' }, { status: 400 })", 'Enter a valid Purchase UUID.'],
+      ["async () => { throw new TypeError('Network failure'); }", 'Purchase funding is temporarily unavailable.'],
+    ]) {
+      await browser.evaluate(`window.fetch = ${mockFetch}; true`);
+      await submit(ids.full);
+      await browser.until(alert(message), message);
+    }
+    await browser.evaluate(`window.fetch = window.originalFundingFetch;
+      [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Try again').click(); true`);
+    await browser.until(`document.querySelector('.funding-summary')?.textContent.includes("${ids.full}")`, 'retry result');
+    assert.equal(await browser.evaluate(`!/accessToken|refreshToken|__Host-ss_/.test(document.documentElement.outerHTML + document.cookie)`), true);
+
+    const staff = await signIn('noGrant');
+    for (const pair of staff.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await submit(ids.full);
+    await browser.until(alert('Your account does not have access to Purchase funding.'), '403 access-denied state');
+    assert.equal(await browser.evaluate('document.querySelector(".funding-summary, input[name=purchaseId]") === null'), true);
+    await browser.go('/');
+    await browser.until(`document.querySelector('[aria-label="Sign out"]')`, 'Staff catalog');
+    assert.equal(await browser.evaluate(`document.querySelector('nav a[href="${fundingPage}"]') === null`), true);
+
+    for (const pair of session.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go(fundingPage);
+    await browser.until(`document.querySelector('input[name=purchaseId]:enabled')`, 'authorized form');
+    await submit(ids.full);
+    await browser.until(`document.querySelector('.funding-summary')?.textContent.includes("${ids.full}")`, 'authorized result');
+    await browser.go('/');
+    await browser.until(`location.pathname === '/' && document.querySelector('[aria-label="Sign out"]')`, 'return to Catalog');
+    for (const pair of staff.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.traverse(-1);
+    await browser.until(`location.pathname === "${fundingPage}" && ${alert('Your account does not have access to Purchase funding.')}`,
+      'funding history rechecks Admin access');
+    assert.equal(await browser.evaluate('document.querySelector(".funding-summary, input[name=purchaseId]") === null'), true);
+    assert(browser.lifecycle.filter(event => event.event === 'pageshow' && new URL(event.url).pathname === fundingPage)
+      .every(event => !event.visible), 'restored history must conceal the previous funding result');
+
+    for (const pair of session.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go(fundingPage);
+    await browser.until(`document.querySelector('input[name=purchaseId]:enabled')`, 'authorized form before expiry');
+    await browser.setCookie(origin, '__Host-ss_access=expired');
+    await submit(ids.full);
+    await browser.until(alert('Your session expired. Sign in or restore your session.'), '401 session-expired state');
+    assert.equal(await browser.evaluate('document.querySelector(".funding-summary, input[name=purchaseId]") === null'), true);
+  });
+});
+
 test('catalog relay returns a safe service unavailable response when the backend stops', async () => {
   const admin = await signIn('admin');
   await api.close();
   api = undefined;
   assert.equal((await relay(admin, 503, 'packages')).code, 'DASHBOARD_UNAVAILABLE');
+  assert.deepEqual(await relay(admin, 503, fundingRoute(randomUUID())), { code: 'DASHBOARD_UNAVAILABLE' });
 });
