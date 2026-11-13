@@ -2,7 +2,7 @@ import { Role, StaffPermission } from '@prisma/client';
 
 export type Action = 'account.self' | 'client.manage' | 'user.manage' | 'staff.grant.manage'
   | 'studio.configure' | 'membership.activate' | 'membership.activate_exception' | 'commission.read'
-  | 'catalog.read' | 'catalog.manage' | 'audit.read' | 'purchase.accept_record'
+  | 'catalog.read' | 'catalog.manage' | 'audit.read' | 'purchase.accept_record' | 'purchase.funding.read'
   | 'payment.record' | 'payment.verify' | 'payment.allocate';
 
 export const staffPermissions = new Map(
@@ -15,7 +15,7 @@ export const staffPermissions = new Map(
 const adminActions = new Set<Action>([
   'account.self', 'client.manage', 'user.manage', 'staff.grant.manage', 'studio.configure',
   'membership.activate', 'membership.activate_exception', 'commission.read',
-  'catalog.read', 'catalog.manage', 'audit.read', 'purchase.accept_record',
+  'catalog.read', 'catalog.manage', 'audit.read', 'purchase.accept_record', 'purchase.funding.read',
   'payment.record', 'payment.verify', 'payment.allocate',
 ]);
 

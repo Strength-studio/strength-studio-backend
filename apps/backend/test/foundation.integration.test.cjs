@@ -1600,6 +1600,96 @@ test('allocation rolls back on audit failure and the original key can retry', as
   assert.deepEqual(await allocationCounts(), counts.map(count => count + 1));
 });
 
+const fundingPath = purchaseId => `/purchases/${purchaseId}/funding`;
+
+test('purchase funding uses frozen terms and exactly sums allocations across verified payments', async () => {
+  const offer = await acceptanceOffer('0.30');
+  const { purchaseId } = await expectStatus(201, positivePricePath, acceptanceRequest(offer));
+  const first = await verifiedPayment();
+  const second = await verifiedPayment();
+
+  const { versionId: successor } = await expectStatus(201, offer.path + '/versions', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, terms: { ...offer.terms, price: '500.00' },
+  }));
+  await expectStatus(204, offer.path + '/versions/' + successor + '/publish',
+    adminWrite({ expectedCurrentVersionId: offer.packageVersionId, expectedDraftRevision: 1 }));
+
+  const path = fundingPath(purchaseId.toUpperCase());
+  const admin = { access: sessions.admin.accessToken };
+  const summary = { purchaseId, currency: 'SAR', purchasePrice: '0.30' };
+  assert.deepEqual(await expectStatus(200, path, admin), {
+    ...summary, allocatedAmount: '0.00', remainingAmount: '0.30', fundingStatus: 'UNFUNDED',
+  });
+  await expectStatus(201, allocationPath(first.id), allocationRequest(purchaseId, '0.10'));
+  assert.deepEqual(await expectStatus(200, path, admin), {
+    ...summary, allocatedAmount: '0.10', remainingAmount: '0.20', fundingStatus: 'PARTIALLY_FUNDED',
+  });
+  await expectStatus(201, allocationPath(second.id), allocationRequest(purchaseId, '0.20'));
+  assert.deepEqual(await expectStatus(200, path, admin), {
+    ...summary, allocatedAmount: '0.30', remainingAmount: '0.00', fundingStatus: 'FULLY_FUNDED',
+  });
+  await expectStatus(201, allocationPath(second.id), allocationRequest(purchaseId, '0.01'));
+  const error = await expectStatus(409, path, admin);
+  assert.equal(error.code, 'PURCHASE_OVERFUNDED');
+  assert.deepEqual(Object.keys(error).sort(), ['code', 'requestId']);
+});
+
+test('complimentary purchase funding has zero due and funding reads leave records untouched', async () => {
+  const offer = await acceptanceOffer();
+  const { acceptanceId, membershipId } = await expectStatus(201, complimentaryPath, acceptanceRequest(offer));
+  const { purchaseId } = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { id: acceptanceId } });
+  const payment = await verifiedPayment();
+  const { purchaseId: fundedPurchaseId } = await allocationPurchase();
+  await expectStatus(201, allocationPath(payment.id), allocationRequest(fundedPurchaseId, '0.01'));
+  const snapshot = () => Promise.all([
+    migrator.purchase.findMany({ orderBy: { id: 'asc' } }),
+    migrator.payment.findMany({ orderBy: { id: 'asc' } }),
+    migrator.paymentAllocation.findMany({ orderBy: { id: 'asc' } }),
+    migrator.membership.findMany({ orderBy: { id: 'asc' } }),
+    migrator.auditLog.findMany({ orderBy: { id: 'asc' } }),
+  ]);
+  const before = await snapshot();
+  const admin = { access: sessions.admin.accessToken };
+  assert.deepEqual(await expectStatus(200, fundingPath(purchaseId), admin), {
+    purchaseId, currency: 'SAR', purchasePrice: '0.00', allocatedAmount: '0.00', remainingAmount: '0.00',
+    fundingStatus: 'FULLY_FUNDED',
+  });
+  await expectStatus(200, fundingPath(fundedPurchaseId), admin);
+  assert.equal((await migrator.membership.findUniqueOrThrow({ where: { id: membershipId } })).status, 'PENDING_ACTIVATION');
+  assert.deepEqual(await snapshot(), before);
+});
+
+test('purchase funding validates IDs and denies non-Admins including Staff with existing read grants', async () => {
+  const { purchaseId } = await allocationPurchase();
+  const path = fundingPath(purchaseId);
+  const admin = { access: sessions.admin.accessToken };
+  assert.equal((await expectStatus(400, fundingPath('invalid'), admin)).code, 'INVALID_INPUT');
+  assert.equal((await expectStatus(404, fundingPath(randomUUID()), admin)).code, 'PURCHASE_NOT_FOUND');
+  assert.equal((await expectStatus(401, path)).code, 'UNAUTHENTICATED');
+  for (const role of ['staff', 'coach', 'client']) {
+    assert.equal((await expectStatus(403, path, { access: sessions[role].accessToken })).code, 'FORBIDDEN');
+  }
+
+  const grants = ['purchase.read', 'finance.read'];
+  try {
+    for (const grant of grants) await expectStatus(204, `/staff-grants/${users.staff.id}/${grant}`, grantOptions(true));
+    const staff = { access: sessions.staff.accessToken };
+    assert.equal((await expectStatus(403, path, staff)).code, 'FORBIDDEN');
+    assert.equal((await expectStatus(403, fundingPath(randomUUID()), staff)).code, 'FORBIDDEN');
+  } finally {
+    for (const grant of grants) await expectStatus(204, `/staff-grants/${users.staff.id}/${grant}`, grantOptions(false));
+  }
+});
+
+test('purchase funding returns a generic integrity error for malformed frozen terms', async () => {
+  const { purchaseId } = await allocationPurchase();
+  // The schema requires a JSON object, but the stored price must be a decimal string.
+  await migrator.$executeRaw`UPDATE purchase SET terms = jsonb_set(terms, '{price}', '25'::jsonb) WHERE id = ${purchaseId}::uuid`;
+  const error = await expectStatus(500, fundingPath(purchaseId), { access: sessions.admin.accessToken });
+  assert.equal(error.code, 'INTERNAL_ERROR');
+  assert.deepEqual(Object.keys(error).sort(), ['code', 'requestId']);
+});
+
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
   const ticket = (await expectStatus(200, '/auth/socket-ticket', { method: 'POST', access: sessions.staff.accessToken })).ticket;
   const wrongOrigin = await fetch(base + '/socket.io/?EIO=4&transport=polling', { headers: { origin: 'https://untrusted.example' } });

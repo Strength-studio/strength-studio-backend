@@ -20,6 +20,7 @@ This is the canonical action and resource map for the [API contract](api-contrac
 | `catalog.private.withdraw` (proposed) | Reasoned withdrawal of unaccepted private offer | No pending explicit withdrawal delegation | No | No |
 | `purchase.request` | No | No | No | Own eligible offer |
 | `purchase.read`, `purchase.review`, `purchase.record` | Yes | Independent scoped reads, intent review and any separately bound preparatory recording. No formal acceptance | No | Own reads only |
+| `purchase.funding.read` | **Admin only** | No | No | No |
 | `purchase.accept_record` (proposed dedicated action) | Formal acceptance and recording, including SAR 0 with purpose | Same named grant, excluding SAR 0. No membership activation | No | No |
 | `finance.read`, `installment.manage` | Yes | Same named grants, independently. No due-date revision through installment management | No | Own financial reads only, including credit and transaction history |
 | `payment.record` | Yes | Named grant | No | No |

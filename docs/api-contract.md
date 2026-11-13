@@ -20,13 +20,14 @@ Sockets use short-lived, single-use tickets minted through authenticated REST. B
 
 ## Route families
 
-All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The public catalog, purchase acceptance, payment recording, payment verification, and payment allocation routes below are implemented. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
+All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The public catalog, purchase acceptance, purchase funding, payment recording, payment verification, and payment allocation routes below are implemented. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
 
 | Family | Endpoint and action |
 |---|---|
 | Identity | Public, rate-limited: registration, login, email verification, and reset. Refresh and logout use their respective session credentials. `GET /me` and socket-ticket issuance use `account.self` and require an active session. `POST /users/invite` uses `client.manage` and creates Client only. Reject role and grant fields. Other account administration uses `user.manage`, and `/staff-grants` uses `staff.grant.manage`. |
 | Studio and catalog | Studio settings writes use `studio.configure`. Package and version reads use `catalog.read`. Public management uses `catalog.manage`. Private issuance and management use dedicated `catalog.private.manage` and exact client/version scope. Admin withdrawal of an unaccepted offer requires a reason and a proposed separate action. |
 | Purchases and installments | Client intent uses `purchase.request` and does not accept a purchase. Own in-app terms confirmation records agreement evidence separately. `purchase.read` and `purchase.review` cover scoped reads and intent review. Formal acceptance and recording use proposed dedicated `purchase.accept_record`, requiring evidence, exact eligible version and immutable snapshot. Installments use `finance.read` or `installment.manage`. Admin-only purchase cancellation and installment due-date revisions use separate proposed actions. |
+| Purchase funding | `GET /purchases/{purchaseId}/funding` uses Admin-only `purchase.funding.read`. |
 | Payments and credit | Record with `payment.record`, verify with Admin-only `payment.verify`, and allocate with Admin-only `payment.allocate`. The proposed `payment.authorize` action is Admin-only and separate from verification. Reallocation, credit application and adjustment, and correction initiation/authorization are Admin-only. Individually authorized Staff may request correction. Read with scoped `finance.read`. See the [proposed routes](milestone-2-implementation-plan.md#payments-allocations-credit-and-financial-reads). |
 | Refunds | `POST /refunds` uses `refund.request` and checks original receipt ownership. Admin-only credit cash-out uses the same formal workflow. Record actual payout reference or reasoned Admin exception. Keep receivable adjustments separate. Reads use `finance.read`. Approve or reject uses `refund.decide`. Begin execution, post, and reconcile use `refund.execute`, `refund.post`, and `refund.reconcile`, respectively. All four decision/execution actions are Admin-only. |
 | Membership and entitlement | `GET /memberships/{id}` uses `membership.read` and returns a summary. `GET /memberships/{id}/entitlement-entries` uses `entitlement.read`. `POST /memberships/{id}/activate` uses Admin-only `membership.activate` in the target contract and checks explicitly allocated payment and credit for the purchase, or the SAR 0 basis. Record the activation instant and optional future Riyadh start date. Reject exception and funding override fields. `POST /memberships/{id}/activate-exception` uses Admin-only `membership.activate_exception` and requires a reason. Suspend, manually reinstate, terminate, and extend use Admin-only `membership.manage`. Scheduled reactivation is a system transition. Use explicit Admin extension for any exception after expiry. Entitlement review and adjustment use `entitlement.adjust`. |
@@ -76,6 +77,18 @@ An authorized same-key replay returns the original IDs. A new key cannot repeat 
 `POST /purchases/positive-price` requires Admin, a bearer credential, and `Idempotency-Key`. It accepts the same fields and agreement methods as complimentary acceptance. The exact public version must be published, current, unarchived, and priced above zero. Price and currency come from the Catalog version.
 
 Success returns `201` with `{ purchaseId }`. The Purchase records the accepted terms, agreement evidence, Admin, and timestamp. Acceptance creates no membership, financial posting, or entitlement. An authorized same-key replay returns the original Purchase ID. Another key for the same Client and version returns `409 POSITIVE_PRICE_ACCEPTANCE_EXISTS`. Missing Clients and package/version pairs return `404`, and ineligible versions return `409 CATALOG_VERSION_NOT_ELIGIBLE`.
+
+## Implemented purchase funding
+
+`GET /purchases/{purchaseId}/funding` requires an Admin bearer credential and a Purchase UUID. A successful response contains `purchaseId`, `currency: "SAR"`, `purchasePrice`, `allocatedAmount`, `remainingAmount`, and `fundingStatus`. All amounts are decimal strings with exactly two fractional digits.
+
+The price comes from the frozen terms at acceptance. The allocated amount is the sum of existing allocations for the Purchase. The remaining amount is the frozen price minus that sum. Verification alone contributes no funding.
+
+- `UNFUNDED` applies to a positive-price Purchase with zero allocations.
+- `PARTIALLY_FUNDED` applies when the allocated amount is positive and below the price.
+- `FULLY_FUNDED` applies when allocations equal the price, including a complimentary SAR 0 Purchase with zero allocations.
+
+An invalid UUID returns `400 INVALID_INPUT`. An unknown Purchase returns `404 PURCHASE_NOT_FOUND`. If allocations exceed the frozen price, the API returns `409 PURCHASE_OVERFUNDED`. Malformed frozen terms return `500 INTERNAL_ERROR`. This read creates no audit event, writes no financial records, and never activates a Membership.
 
 ## Implemented payment recording
 

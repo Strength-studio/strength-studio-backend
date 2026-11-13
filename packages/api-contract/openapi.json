@@ -1568,6 +1568,62 @@
           "Payments"
         ]
       }
+    },
+    "/api/v1/purchases/{purchaseId}/funding": {
+      "get": {
+        "description": "Admin only. Uses frozen terms and recorded allocations.",
+        "operationId": "PurchaseFundingController_summary",
+        "parameters": [
+          {
+            "name": "purchaseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseFundingDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid purchase ID"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Purchase not found"
+          },
+          "409": {
+            "description": "Allocations exceed the frozen purchase price"
+          },
+          "500": {
+            "description": "Invalid stored purchase terms or other internal error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read purchase funding",
+        "tags": [
+          "Purchase funding"
+        ]
+      }
     }
   },
   "info": {
@@ -2349,6 +2405,53 @@
           "purchaseId",
           "amount",
           "currency"
+        ]
+      },
+      "PurchaseFundingDto": {
+        "type": "object",
+        "properties": {
+          "purchaseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "SAR"
+            ]
+          },
+          "purchasePrice": {
+            "type": "string",
+            "example": "500.00",
+            "description": "Frozen purchase price with two fractional digits."
+          },
+          "allocatedAmount": {
+            "type": "string",
+            "example": "200.00",
+            "description": "Total of existing allocations with two fractional digits."
+          },
+          "remainingAmount": {
+            "type": "string",
+            "example": "300.00",
+            "description": "Amount still due with two fractional digits."
+          },
+          "fundingStatus": {
+            "type": "string",
+            "enum": [
+              "UNFUNDED",
+              "PARTIALLY_FUNDED",
+              "FULLY_FUNDED"
+            ],
+            "description": "FULLY_FUNDED includes complimentary purchases with zero due."
+          }
+        },
+        "required": [
+          "purchaseId",
+          "currency",
+          "purchasePrice",
+          "allocatedAmount",
+          "remainingAmount",
+          "fundingStatus"
         ]
       }
     }
