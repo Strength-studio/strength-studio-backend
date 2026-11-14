@@ -55,6 +55,6 @@ export class ComplimentaryAcceptanceDto {
   @ApiProperty({ format: 'uuid' })
   membershipId!: string;
 
-  @ApiProperty({ enum: MembershipStatus })
-  status!: MembershipStatus;
+  @ApiProperty({ enum: [MembershipStatus.PENDING_ACTIVATION] })
+  status!: typeof MembershipStatus.PENDING_ACTIVATION;
 }

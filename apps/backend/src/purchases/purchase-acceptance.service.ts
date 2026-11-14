@@ -16,9 +16,10 @@ export class PurchaseAcceptanceService {
   async acceptComplimentary(access: AccessContext, requestId: string, key: string | undefined, dto: AcceptPackageDto) {
     const acceptanceId = await this.record(PurchaseType.COMPLIMENTARY, access, requestId, key, dto);
     const membership = await this.db.membership.findFirstOrThrow({
-      where: { purchase: { acceptance: { id: acceptanceId } } }, select: { id: true, status: true },
+      where: { purchase: { acceptance: { id: acceptanceId } } }, select: { id: true },
     });
-    return { acceptanceId, membershipId: membership.id, status: membership.status };
+    // The acceptance response describes issuance, including on replay after activation.
+    return { acceptanceId, membershipId: membership.id, status: 'PENDING_ACTIVATION' as const };
   }
 
   async acceptPositivePrice(access: AccessContext, requestId: string, key: string | undefined, dto: AcceptPackageDto) {

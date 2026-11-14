@@ -22,6 +22,7 @@ import { Database } from './platform/database';
 import { HealthController } from './platform/health.controller';
 import { ErrorFilter, requestContext } from './platform/http';
 import { ComplimentaryController } from './purchases/complimentary.controller';
+import { MembershipActivationService } from './purchases/membership-activation.service';
 import { PositivePriceController } from './purchases/positive-price.controller';
 import { PurchaseAcceptanceService } from './purchases/purchase-acceptance.service';
 import { PurchaseFundingController } from './purchases/purchase-funding.controller';
@@ -40,7 +41,7 @@ export async function createApp(config: Config) {
     providers: [
       { provide: CONFIG, useValue: config },
       Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService, PurchaseAcceptanceService, PaymentService,
-      PurchaseFundingService,
+      PurchaseFundingService, MembershipActivationService,
       { provide: APP_GUARD, useClass: ThrottlerGuard },
       { provide: APP_GUARD, useClass: AccessGuard },
     ],

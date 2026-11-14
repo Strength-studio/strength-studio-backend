@@ -10,3 +10,26 @@ export type PurchaseFunding = {
   remainingAmount: string;
   fundingStatus: typeof fundingStatuses[number];
 };
+
+export const membershipStatuses = ['NOT_CREATED', 'PENDING_ACTIVATION', 'ACTIVE', 'EXPIRED', 'INELIGIBLE'] as const;
+
+export type MembershipState = {
+  membershipId: string | null;
+  status: typeof membershipStatuses[number];
+};
+
+export type ActivationResult = {
+  membership: {
+    id: string;
+    purchaseId: string;
+    status: 'ACTIVE';
+    activatedAt: string;
+    validFrom: string;
+    validThrough: string;
+    initialSessionAllowance: number | null;
+  };
+  purchaseType: 'COMPLIMENTARY' | 'POSITIVE_PRICE';
+  fundingStatus: PurchaseFunding['fundingStatus'];
+  overrideUsed: boolean;
+  overrideReason?: string;
+};

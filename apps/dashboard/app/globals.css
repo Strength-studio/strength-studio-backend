@@ -214,3 +214,7 @@ textarea { resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; }
 }
+
+.membership-activation, .activation-confirmation { display: grid; gap: 12px; }
+.activation-override { display: flex; align-items: center; gap: 8px; }
+.activation-reason { display: grid; gap: 5px; max-width: 520px; }

@@ -1624,6 +1624,133 @@
           "Purchase funding"
         ]
       }
+    },
+    "/api/v1/purchases/{purchaseId}/membership": {
+      "get": {
+        "description": "Admin only. Reads the membership linked to this purchase.",
+        "operationId": "PurchaseFundingController_membership",
+        "parameters": [
+          {
+            "name": "purchaseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipActivationStateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid purchase ID"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Purchase not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read membership activation state",
+        "tags": [
+          "Purchase funding"
+        ]
+      }
+    },
+    "/api/v1/purchases/{purchaseId}/activate-membership": {
+      "post": {
+        "description": "Admin only. Checks current funding and starts validity on the Riyadh date of approval. Positive-price purchases with a balance due require an explicit override and reason.",
+        "operationId": "PurchaseFundingController_activate",
+        "parameters": [
+          {
+            "name": "purchaseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateMembershipDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipActivationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or idempotency key, or missing or invalid override reason"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Purchase not found"
+          },
+          "409": {
+            "description": "Membership already activated or ineligible, funding conflict, override required, or idempotency key cannot be replayed"
+          },
+          "500": {
+            "description": "Invalid stored funding terms or other internal error"
+          },
+          "503": {
+            "description": "Retry the transaction with the same idempotency key"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Activate the membership for a purchase",
+        "tags": [
+          "Purchase funding"
+        ]
+      }
     }
   },
   "info": {
@@ -2452,6 +2579,127 @@
           "allocatedAmount",
           "remainingAmount",
           "fundingStatus"
+        ]
+      },
+      "MembershipActivationStateDto": {
+        "type": "object",
+        "properties": {
+          "membershipId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NOT_CREATED",
+              "PENDING_ACTIVATION",
+              "ACTIVE",
+              "EXPIRED",
+              "INELIGIBLE"
+            ]
+          }
+        },
+        "required": [
+          "membershipId",
+          "status"
+        ]
+      },
+      "ActivateMembershipDto": {
+        "type": "object",
+        "properties": {
+          "override": {
+            "type": "boolean",
+            "description": "Explicit approval to activate a positive-price purchase with a balance due."
+          },
+          "overrideReason": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Reason for proceeding with a balance due. Required when override is true."
+          }
+        }
+      },
+      "ActivatedMembershipDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "purchaseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE"
+            ]
+          },
+          "activatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date",
+            "description": "First validity date in Asia/Riyadh."
+          },
+          "validThrough": {
+            "type": "string",
+            "format": "date",
+            "description": "Last validity date in Asia/Riyadh, inclusive."
+          },
+          "initialSessionAllowance": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "purchaseId",
+          "status",
+          "activatedAt",
+          "validFrom",
+          "validThrough",
+          "initialSessionAllowance"
+        ]
+      },
+      "MembershipActivationDto": {
+        "type": "object",
+        "properties": {
+          "membership": {
+            "$ref": "#/components/schemas/ActivatedMembershipDto"
+          },
+          "purchaseType": {
+            "type": "string",
+            "enum": [
+              "COMPLIMENTARY",
+              "POSITIVE_PRICE"
+            ]
+          },
+          "fundingStatus": {
+            "type": "string",
+            "enum": [
+              "UNFUNDED",
+              "PARTIALLY_FUNDED",
+              "FULLY_FUNDED"
+            ]
+          },
+          "overrideUsed": {
+            "type": "boolean"
+          },
+          "overrideReason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "membership",
+          "purchaseType",
+          "fundingStatus",
+          "overrideUsed"
         ]
       }
     }

@@ -538,6 +538,8 @@ test('real catalog commands preserve roles, history and conflict codes through t
 
 const fundingPage = '/purchase-funding';
 const fundingRoute = id => 'purchases/' + id + '/funding';
+const activationRoute = id => 'purchases/' + id + '/activate-membership';
+const membershipRoute = id => 'purchases/' + id + '/membership';
 
 async function fundingFixtures() {
   const [admin, client] = await Promise.all([
@@ -555,7 +557,9 @@ async function fundingFixtures() {
     } });
     const purchase = await fixture.purchase.create({ data: {
       clientId: client.id, packageVersionId, type: name === 'complimentary' ? 'COMPLIMENTARY' : 'POSITIVE_PRICE',
-      acceptedById: admin.id, acceptedAt: new Date(), terms: { price, currency: 'SAR' },
+      acceptedById: admin.id, acceptedAt: new Date(), terms: { price, currency: 'SAR', kind: 'TIME', validityDays: 30, sessionAllowance: null },
+      acceptance: { create: { agreementMethod: 'VERBAL_AGREEMENT', agreementEvidence: 'Test agreement', purpose: 'Test purchase' } },
+      membership: name === 'complimentary' ? { create: {} } : undefined,
     } });
     purchases[name] = purchase.id;
     if (allocated) {
@@ -766,6 +770,135 @@ test('Purchase funding viewer validates input, displays results, and handles ser
     await browser.until(`document.querySelector('[aria-label="Sign out"]') && document.querySelector('nav a[href="${fundingPage}"]')`,
       'existing session restoration returns to Admin Catalog');
     assert.equal(await browser.evaluate('document.querySelector(".funding-summary, input[name=purchaseId]") === null'), true);
+  });
+});
+
+test('Membership activation relay requires Admin, CSRF, an exact path and an idempotency key', async () => {
+  const ids = await fundingFixtures();
+  const path = activationRoute(ids.full);
+  const admin = await signIn('admin');
+  const post = { method: 'POST', payload: {} };
+  const before = upstreamRequests;
+  assert.deepEqual(await relay({ cookie: '' }, 401, path, post), { code: 'UNAUTHENTICATED' });
+  for (const options of [{ csrf: '' }, { source: 'https://foreign.invalid' }]) {
+    assert.deepEqual(await relay(admin, 403, path, { ...post, ...options }), { code: 'CSRF_DENIED' });
+  }
+  assert.deepEqual(await relay(admin, 400, path, { ...post, key: ' ' }), { code: 'INVALID_IDEMPOTENCY_KEY' });
+  assert.deepEqual(await relay(admin, 400, path + '?override=true', post), { code: 'INVALID_INPUT' });
+  assert.deepEqual(await relay(admin, 404, path + '/extra', post), { code: 'NOT_FOUND' });
+  const getActivation = await fetch(origin + '/api/studio/v1/' + path, { headers: { cookie: admin.cookie } });
+  assert.equal(getActivation.status, 405);
+  assert.equal(getActivation.headers.get('allow'), 'POST');
+  assert.equal(upstreamRequests, before);
+
+  for (const account of ['clientManager', 'coach', 'client']) {
+    const actor = await signIn(account);
+    const credential = admin.cookie.split('; ').find(cookie => cookie.startsWith('__Host-ss_access=')).split('=')[1];
+    assert.deepEqual(await relay(actor, 403, path, { ...post, headers: { Authorization: 'Bearer ' + credential } }), { code: 'FORBIDDEN' });
+    assert.deepEqual(await relay(actor, 403, membershipRoute(ids.full)), { code: 'FORBIDDEN' });
+    const page = await fetch(origin + fundingPage, { headers: { cookie: actor.cookie } });
+    assert.doesNotMatch(await page.text(), /Confirm activation|Activate membership/);
+  }
+  assert.deepEqual(await relay(admin, 200, membershipRoute(ids.full)), { membershipId: null, status: 'NOT_CREATED' });
+  assert.deepEqual(await relay(admin, 409, activationRoute(ids.partial), post), { code: 'ACTIVATION_OVERRIDE_REQUIRED' });
+  const write = { ...post, key: randomUUID() };
+  const result = await relay(admin, 200, path, write);
+  assert.equal(result.membership.status, 'ACTIVE');
+  assert.equal(result.membership.purchaseId, ids.full);
+  assert.equal(result.overrideUsed, false);
+  assert.equal(result.overrideReason, undefined);
+  assert.deepEqual(await relay(admin, 200, path, write), result);
+  assert.deepEqual(await relay(admin, 200, membershipRoute(ids.full)), { membershipId: result.membership.id, status: 'ACTIVE' });
+});
+
+test('Membership activation in Chrome confirms full, partial, unfunded, and complimentary purchases', browserTest, async () => {
+  const ids = await fundingFixtures();
+  const startingMember = await fixture.membership.findUniqueOrThrow({ where: { purchaseId: ids.complimentary } });
+  const admin = await signIn('admin');
+  await withChrome(origin, ids.full, async browser => {
+    await browser.go('/');
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go(fundingPage);
+    const selector = '.membership-activation';
+    const findButton = text => `[...document.querySelectorAll('${selector} button')].find(button => button.textContent.trim() === "${text}")`;
+    const click = async text => {
+      await browser.until(`!!${findButton(text)}`, text);
+      await browser.evaluate(`${findButton(text)}.click(); true`);
+    };
+    const lookup = async id => {
+      await browser.until('document.querySelector("input[name=purchaseId]:enabled")', 'purchase lookup');
+      await browser.evaluate(`var lookupInput = document.querySelector('input[name=purchaseId]'); lookupInput.value = "${id}"; lookupInput.form.requestSubmit(); true`);
+      await browser.until(`document.querySelector(".funding-summary")?.textContent.includes("${id}")`, 'purchase summary');
+    };
+    for (const name of ['full', 'partial', 'unfunded', 'complimentary']) {
+      const id = ids[name];
+      await lookup(id);
+      await browser.until(`document.querySelector('${selector}')?.textContent.includes('Pending activation')`, name + ' pending');
+      assert.equal(browser.responses.filter(response => response.url.endsWith('/' + activationRoute(id))).length, 0);
+      await click('Activate membership');
+      await browser.until(`document.querySelector('${selector} h3')?.textContent.includes('Confirm membership activation')`, 'confirmation');
+      assert.equal((await fixture.membership.findUnique({ where: { purchaseId: id } }))?.status,
+        name === 'complimentary' ? 'PENDING_ACTIVATION' : undefined);
+      if (name === 'full') {
+        await click('Cancel');
+        await click('Activate membership');
+      }
+      if (name === 'partial' || name === 'unfunded') {
+        assert.equal(await browser.evaluate(`${findButton('Confirm activation')}.disabled`), true);
+        await browser.evaluate(`document.querySelector('${selector} input[type=checkbox]').click(); true`);
+        await browser.until(`document.querySelector('${selector} textarea')`, 'override reason');
+        assert.equal(await browser.evaluate(`${findButton('Confirm activation')}.disabled`), true);
+        await browser.evaluate(`(() => {
+          const field = document.querySelector('${selector} textarea');
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, 'Admin approved the requested start.');
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        })()`);
+      } else {
+        assert.equal(await browser.evaluate(`document.querySelector('${selector} input[type=checkbox]') === null`), true);
+        if (name === 'complimentary') assert.match(await browser.evaluate(`document.querySelector('${selector}').textContent`), /No payment is required/);
+      }
+      await browser.until(`!${findButton('Confirm activation')}.disabled`, 'confirm enabled');
+      await click('Confirm activation');
+      await browser.until(`document.querySelector('${selector} [role=status]')?.textContent.includes('Membership activated')`, name + ' activation success');
+      const membership = await fixture.membership.findUniqueOrThrow({ where: { purchaseId: id } });
+      assert.equal(membership.status, 'ACTIVE');
+      if (name === 'complimentary') assert.equal(membership.id, startingMember.id);
+    }
+    await browser.go(fundingPage);
+    await lookup(ids.full);
+    await browser.until(`document.querySelector('${selector}')?.textContent.includes('Active')`, 'active after refresh');
+    assert.equal(await browser.evaluate(`!!${findButton('Activate membership')}`), false);
+  });
+});
+
+test('Membership activation in Chrome reports stale funding and can refresh before confirmation', browserTest, async () => {
+  const ids = await fundingFixtures();
+  const admin = await signIn('admin');
+  await withChrome(origin, ids.full, async browser => {
+    await browser.go('/');
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go(fundingPage);
+    await browser.until('document.querySelector("input[name=purchaseId]:enabled")', 'purchase lookup');
+    await browser.evaluate(`const input = document.querySelector('input[name=purchaseId]');
+      input.value = "${ids.full}"; input.form.requestSubmit(); true`);
+    const activate = `[...document.querySelectorAll('.membership-activation button')].find(button => button.textContent === 'Activate membership')`;
+    await browser.until(`!!${activate}`, 'activation available');
+    await browser.evaluate(`${activate}.click(); true`);
+    const purchase = await fixture.purchase.findUniqueOrThrow({ where: { id: ids.full } });
+    const payment = await fixture.payment.create({ data: {
+      intakeId: randomUUID(), clientId: purchase.clientId, recordedById: purchase.acceptedById, amount: 1,
+      currency: 'SAR', method: 'CASH', status: 'VERIFIED', receivedAt: new Date(),
+      verifiedById: purchase.acceptedById, verifiedAt: new Date(),
+    } });
+    await fixture.$executeRaw`INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+      VALUES (${payment.id}::uuid, ${purchase.id}::uuid, 1, ${purchase.acceptedById}::uuid)`;
+    await browser.evaluate(`document.querySelector('.activation-confirmation button[type=submit]').click(); true`);
+    const alert = text => `document.querySelector('[role=alert]')?.textContent.includes("${text}")`;
+    await browser.until(alert('Activation could not proceed'), 'stale funding error');
+    assert.equal(await fixture.membership.count({ where: { purchaseId: purchase.id } }), 0);
+    await browser.evaluate(`document.querySelector('.membership-activation button').click(); true`);
+    await browser.until(alert('Funding information cannot be displayed'), 'funding conflict after refresh');
   });
 });
 

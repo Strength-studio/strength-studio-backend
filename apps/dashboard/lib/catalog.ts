@@ -78,13 +78,13 @@ export function newWrite(path: string, payload: object, method: CatalogWrite['me
   return { path, method, body: JSON.stringify(payload), key: crypto.randomUUID() };
 }
 
-export async function write(intent: CatalogWrite) {
+export async function write<T = { packageId?: string; versionId?: string; sessionTypeId?: string }>(intent: CatalogWrite): Promise<Partial<T>> {
   const { csrfToken } = await (await request('/api/session/csrf')).json();
   const response = await request('/api/studio/v1/' + intent.path, {
     method: intent.method, body: intent.body,
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken, 'Idempotency-Key': intent.key },
   });
-  return response.status === 204 ? {} : await response.json() as { packageId?: string; versionId?: string; sessionTypeId?: string };
+  return response.status === 204 ? {} : await response.json() as T;
 }
 
 export async function capability(path: string) {

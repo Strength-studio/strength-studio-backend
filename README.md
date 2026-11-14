@@ -68,6 +68,13 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
   --test-name-pattern='Client browser history' apps/dashboard/test/catalog.integration.test.cjs
 ```
 
+Run the Purchase Funding and Membership Activation browser regressions in a separate process so the shared login throttle has a fresh window.
+
+```sh
+STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket --env-file=.env --test \
+  --test-name-pattern='Purchase funding viewer|Membership activation in Chrome' apps/dashboard/test/catalog.integration.test.cjs
+```
+
 ## Implemented scope
 
 - Argon2id sign-in for active, verified accounts, short-lived bearer tokens, refresh rotation and replay revocation, logout, and single-use socket tickets. Current roles and staff grants are checked server-side. Existing sockets disconnect on invalidation or failed revalidation.
@@ -75,6 +82,8 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
 - Public package and session-type API with versioned drafts, Admin-only zero-price publication, and scoped catalog history. See [public catalog routes](docs/api-contract.md#implemented-public-catalog).
 - Process health and PostgreSQL readiness, validated configuration, request IDs, redacted request logs, and the [OpenAPI snapshot](packages/api-contract/openapi.json).
 
-Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. Both membership activation stubs and commission reads are Admin-only and return `WORKFLOW_NOT_ENABLED` for authorized calls. Private offers, purchases, payments, refunds, scheduling and attendance remain deferred. Redis/BullMQ delivery, SMTP, and production deployment are later milestones. There are no finance, booking, commission, or outbox tables in this migration.
+- Purchase acceptance, payment recording, verification and allocation, and the Admin Purchase Funding viewer with explicit membership activation. See [membership activation](docs/api-contract.md#implemented-membership-activation).
+
+Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. The legacy membership activation stubs and commission reads remain Admin-only and return `WORKFLOW_NOT_ENABLED`. Private offers, refunds, scheduling, attendance, Redis/BullMQ delivery, SMTP, and production deployment remain deferred.
 
 See [the implementation roadmap](docs/implementation-roadmap.md), [API contract](docs/api-contract.md), and [open studio decisions](docs/open-decisions.md).

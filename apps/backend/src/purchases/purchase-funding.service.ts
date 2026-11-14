@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, PurchaseType } from '@prisma/client';
-import { Database } from '../platform/database';
+import { Database, Transaction } from '../platform/database';
 import { failure } from '../platform/http';
 import { PurchaseFundingDto } from './purchase-funding.dto';
 
@@ -8,8 +8,8 @@ import { PurchaseFundingDto } from './purchase-funding.dto';
 export class PurchaseFundingService {
   constructor(private readonly db: Database) {}
 
-  async summary(purchaseId: string): Promise<PurchaseFundingDto> {
-    const [purchase] = await this.db.$queryRaw<{
+  async summary(purchaseId: string, db: Transaction = this.db): Promise<PurchaseFundingDto> {
+    const [purchase] = await db.$queryRaw<{
       id: string; type: PurchaseType; price: string | null; currency: string | null; allocated: Prisma.Decimal;
     }[]>`
       SELECT p.id, p.type,

@@ -2,8 +2,9 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { CatalogError, get, money } from '../../lib/catalog';
-import { PurchaseFunding, purchaseUuid } from '../../lib/purchase-funding';
+import { MembershipState, PurchaseFunding, purchaseUuid } from '../../lib/purchase-funding';
 import { Icon } from '../catalog/ui';
+import { MembershipActivation } from './activation';
 
 const fundingLabels = {
   UNFUNDED: ['Unfunded', ''],
@@ -24,12 +25,13 @@ const messages: Record<number, string> = {
 type Lookup =
   | { state: 'idle' }
   | { state: 'loading' }
-  | { state: 'loaded'; funding: PurchaseFunding }
+  | { state: 'loaded'; funding: PurchaseFunding; membership: MembershipState | null }
   | { state: 'error'; status: number; retry?: () => void };
 
 export function FundingViewer() {
   const [lookup, setLookup] = useState<Lookup>({ state: 'idle' });
   const [ready, setReady] = useState(false);
+  const [activating, setActivating] = useState(false);
   useEffect(() => setReady(true), []);
   const loading = lookup.state === 'loading';
 
@@ -41,7 +43,11 @@ export function FundingViewer() {
     setLookup({ state: 'loading' });
     try {
       const funding = await get<PurchaseFunding>(`purchases/${id}/funding`);
-      setLookup({ state: 'loaded', funding });
+      const membership = await get<MembershipState>(`purchases/${id}/membership`).catch(error => {
+        if (error instanceof CatalogError && (error.status === 401 || error.status === 403)) throw error;
+        return null;
+      });
+      setLookup({ state: 'loaded', funding, membership });
     } catch (error) {
       const status = error instanceof CatalogError ? error.status : 503;
       if (status === 401) {
@@ -54,7 +60,7 @@ export function FundingViewer() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!ready || loading) return;
+    if (!ready || loading || activating) return;
     void load(String(new FormData(event.currentTarget).get('purchaseId') ?? '').trim().toLowerCase());
   }
 
@@ -67,9 +73,9 @@ export function FundingViewer() {
       <label>Purchase ID
         <input name="purchaseId" type="text" autoComplete="off" spellCheck={false}
           aria-invalid={error?.status === 400 || undefined} aria-describedby={error?.status === 400 ? 'funding-error' : undefined}
-          disabled={!ready || loading} />
+          disabled={!ready || loading || activating} />
       </label>
-      <button type="submit" className="button primary" disabled={!ready || loading}><Icon name="search" /> View funding</button>
+      <button type="submit" className="button primary" disabled={!ready || loading || activating}><Icon name="search" /> View funding</button>
     </form>}
     {loading && <div className="empty" role="status"><span className="spinner" />Loading Purchase funding…</div>}
     {error && <div className="notice error" role="alert" id="funding-error">
@@ -90,5 +96,8 @@ export function FundingViewer() {
           {fundingLabels[funding.fundingStatus][0]}</span></dd></div>
       </dl>
     </section>}
+    {lookup.state === 'loaded' && <MembershipActivation key={lookup.funding.purchaseId}
+      funding={lookup.funding} membership={lookup.membership} onBusy={setActivating}
+      onReload={() => void load(lookup.funding.purchaseId)} />}
   </>;
 }

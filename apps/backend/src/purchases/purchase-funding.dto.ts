@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-const fundingStatuses = ['UNFUNDED', 'PARTIALLY_FUNDED', 'FULLY_FUNDED'] as const;
+export const fundingStatuses = ['UNFUNDED', 'PARTIALLY_FUNDED', 'FULLY_FUNDED'] as const;
 
 export class PurchaseFundingDto {
   @ApiProperty({ format: 'uuid' })

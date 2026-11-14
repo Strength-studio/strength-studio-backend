@@ -83,6 +83,7 @@ enum AuditAction {
   PAYMENT_RECORDED
   PAYMENT_VERIFIED
   PAYMENT_ALLOCATED
+  MEMBERSHIP_ACTIVATED
 
   @@map("audit_action")
 }
@@ -98,6 +99,7 @@ enum AuditTarget {
   PURCHASE
   PAYMENT
   PAYMENT_ALLOCATION
+  MEMBERSHIP
 
   @@map("audit_target")
 }
@@ -345,6 +347,7 @@ enum AgreementMethod {
 
 enum MembershipStatus {
   PENDING_ACTIVATION
+  ACTIVE
 
   @@map("membership_status")
 }
@@ -397,6 +400,10 @@ model Membership {
   status     MembershipStatus @default(PENDING_ACTIVATION)
   purchaseId String           @unique @map("purchase_id") @db.Uuid
   purchase   Purchase         @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  activatedAt DateTime?       @map("activated_at") @db.Timestamptz(6)
+  validFrom   DateTime?       @map("valid_from") @db.Date
+  validThrough DateTime?      @map("valid_through") @db.Date
+  initialSessionAllowance Int? @map("initial_session_allowance")
 
   @@map("membership")
 }

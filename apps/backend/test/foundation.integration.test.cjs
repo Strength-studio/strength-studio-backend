@@ -670,7 +670,7 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 });
 
-test('payment migrations preserve historical purchases, receipts and replay across upgrades', async () => {
+test('payment and membership migrations preserve historical purchases, receipts, allocations and replay across upgrades', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'studio-purchase-upgrade-'));
   const legacySchema = join(scratch, 'schema.prisma');
   const { api, migration } = disposableUrls();
@@ -761,7 +761,7 @@ test('payment migrations preserve historical purchases, receipts and replay acro
     assert.equal(paidAcceptance.status, 201);
     const { purchaseId: paidId } = await paidAcceptance.json();
     const paidPurchase = () => upgradeDb.purchase.findUniqueOrThrow({
-      where: { id: paidId }, include: { acceptance: true, membership: true },
+      where: { id: paidId }, include: { acceptance: true, membership: { select: { id: true } } },
     });
     const paidBefore = await paidPurchase();
     const paidAudit = await upgradeDb.auditLog.findFirstOrThrow({ where: { targetType: 'PURCHASE', targetId: paidId } });
@@ -800,8 +800,21 @@ test('payment migrations preserve historical purchases, receipts and replay acro
     await upgradeApp.close();
     upgradeApp = undefined;
 
+    const allocationMigration = '20261113000200_payment_allocation';
+    cpSync(join(prismaDirectory, 'migrations', allocationMigration), join(scratch, 'migrations', allocationMigration), { recursive: true });
+    deployMigrations(api, migration, legacySchema);
+    const [pendingBefore] = await upgradeDb.$queryRaw`
+      SELECT to_jsonb(membership) AS record FROM membership WHERE id = ${membershipId}::uuid`;
+    const [historicalAllocation] = await upgradeDb.$queryRaw`
+      INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+      VALUES (${legacyPaymentId}::uuid, ${paidId}::uuid, 25.00, ${admin.id}::uuid)
+      RETURNING to_jsonb(payment_allocation) AS record`;
     deployMigrations(api, migration);
     deployMigrations(api, migration);
+    const { created_at: originalMembershipCreated, ...pendingRecord } = pendingBefore.record;
+    assert.deepEqual(new Date(originalMembershipCreated), acceptedAt);
+    assert.deepEqual(pendingRecord, { id: membershipId, purchase_id: originalPurchase.id,
+      status: 'PENDING_ACTIVATION' });
     const [upgradedPayment] = await upgradeDb.$queryRaw`
       SELECT to_jsonb(payment) AS receipt FROM payment WHERE id = ${legacyPaymentId}::uuid`;
     assert.deepEqual(upgradedPayment.receipt, {
@@ -810,7 +823,9 @@ test('payment migrations preserve historical purchases, receipts and replay acro
     assert(upgradedPayment.receipt.verified_at);
     assert.deepEqual(await upgradeDb.payment.findUniqueOrThrow({ where: { id: legacyPaymentId } }), verifiedPayment);
     assert.deepEqual(await upgradeDb.auditLog.findUniqueOrThrow({ where: { id: verificationAudit.id } }), verificationAudit);
-    assert.equal(await upgradeDb.paymentAllocation.count(), 0);
+    const historicalAllocations = await upgradeDb.$queryRaw`
+      SELECT to_jsonb(payment_allocation) AS record FROM payment_allocation`;
+    assert.deepEqual(historicalAllocations, [historicalAllocation]);
     const purchase = await upgradeDb.purchase.findUniqueOrThrow({
       where: { id: originalPurchase.id }, include: { acceptance: true, membership: true },
     });
@@ -829,7 +844,8 @@ test('payment migrations preserve historical purchases, receipts and replay acro
     });
     assert.deepEqual(purchase.acceptance, { id: acceptanceId, purchaseId: purchase.id, agreementMethod: body.agreementMethod,
       agreementEvidence: body.agreementEvidence, purpose: body.purpose });
-    assert.deepEqual(purchase.membership, { id: membershipId, purchaseId: purchase.id, createdAt: acceptedAt, status: 'PENDING_ACTIVATION' });
+    assert.deepEqual(purchase.membership, { id: membershipId, purchaseId: purchase.id, createdAt: acceptedAt, status: 'PENDING_ACTIVATION',
+      activatedAt: null, validFrom: null, validThrough: null, initialSessionAllowance: null });
     assert.deepEqual(await upgradeDb.auditLog.findUniqueOrThrow({ where: { id: audit.id } }), audit);
     assert.deepEqual(await upgradeDb.idempotencyKey.findUniqueOrThrow({ where: { id: retry.id } }), retry);
     assert.deepEqual(await paidPurchase(), paidBefore);
@@ -850,9 +866,15 @@ test('payment migrations preserve historical purchases, receipts and replay acro
     const verifiedReplay = await upgradedPost(verifyPath, {}, verificationKey);
     assert.equal(verifiedReplay.status, 200);
     assert.deepEqual(await verifiedReplay.json(), verifiedResponse);
-    const allocation = await upgradedPost(`/payments/${legacyPaymentId}/allocations`, { purchaseId: paidId, amount: '75.00' }, randomUUID());
+    const allocation = await upgradedPost(`/payments/${legacyPaymentId}/allocations`, { purchaseId: paidId, amount: '50.00' }, randomUUID());
     assert.equal(allocation.status, 201);
-    assert.equal(await upgradeDb.paymentAllocation.count(), 1);
+    assert.equal(await upgradeDb.paymentAllocation.count(), 2);
+    const activation = await upgradedPost(`/purchases/${purchase.id}/activate-membership`, {}, randomUUID());
+    assert.equal(activation.status, 200);
+    assert.equal((await activation.json()).membership.id, membershipId);
+    const acceptanceReplay = await upgradedPost(complimentaryPath, body, retry.key);
+    assert.equal(acceptanceReplay.status, 201);
+    assert.deepEqual(await acceptanceReplay.json(), { acceptanceId, membershipId, status: 'PENDING_ACTIVATION' });
 
     // Model a future type only in this disposable database.
     await upgradeDb.$executeRaw`ALTER TYPE purchase_type ADD VALUE 'TEST_REPEATABLE'`;
@@ -1702,6 +1724,233 @@ test('purchase funding rejects frozen prices that contradict the purchase type',
     assert.equal(error.code, 'INTERNAL_ERROR');
     assert.deepEqual(Object.keys(error).sort(), ['code', 'requestId']);
   }
+});
+
+const activationPath = id => `/purchases/${id}/activate-membership`;
+const membershipStatePath = id => `/purchases/${id}/membership`;
+const activateWithOverride = { override: true, overrideReason: '  Approved for the client to begin this week.  ' };
+
+test('Admin activates a fully funded membership using frozen validity and session terms', async () => {
+  const offer = await acceptanceOffer('25.00');
+  const { purchaseId } = await expectStatus(201, positivePricePath, acceptanceRequest(offer));
+  const payment = await verifiedPayment();
+  await expectStatus(201, allocationPath(payment.id), allocationRequest(purchaseId, '25.00'));
+  const admin = { access: sessions.admin.accessToken };
+  assert.deepEqual(await expectStatus(200, membershipStatePath(purchaseId), admin), {
+    membershipId: null, status: 'NOT_CREATED',
+  });
+  assert.equal(await migrator.membership.count({ where: { purchaseId } }), 0);
+  const { versionId } = await expectStatus(201, offer.path + '/versions', adminWrite({
+    expectedCurrentVersionId: offer.packageVersionId, terms: { ...offer.terms, validityDays: 4, sessionAllowance: 10, price: '50.00' },
+  }));
+  await expectStatus(204, offer.path + '/versions/' + versionId + '/publish',
+    adminWrite({ expectedCurrentVersionId: offer.packageVersionId, expectedDraftRevision: 1 }));
+
+  const before = await migrator.$queryRaw`SELECT clock_timestamp() AS now`;
+  const write = adminWrite({});
+  const result = await expectStatus(200, activationPath(purchaseId), write);
+  const after = await migrator.$queryRaw`SELECT clock_timestamp() AS now`;
+  const { membership } = result;
+  const timestamp = new Date(membership.activatedAt);
+  assert(timestamp >= before[0].now && timestamp <= after[0].now);
+  const firstDay = new Date(timestamp.valueOf() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const finalDay = new Date(Date.parse(firstDay) + 13 * 86_400_000).toISOString().slice(0, 10);
+  assert.deepEqual(result, {
+    purchaseType: 'POSITIVE_PRICE', fundingStatus: 'FULLY_FUNDED', overrideUsed: false,
+    membership: { id: membership.id, purchaseId, status: 'ACTIVE', activatedAt: timestamp.toISOString(),
+      validFrom: firstDay, validThrough: finalDay, initialSessionAllowance: 2 },
+  });
+  assert.deepEqual(await expectStatus(200, membershipStatePath(purchaseId), admin), {
+    membershipId: membership.id, status: 'ACTIVE',
+  });
+  assert.deepEqual(await expectStatus(200, activationPath(purchaseId), write), result);
+  assert.equal((await expectStatus(409, activationPath(purchaseId), { ...write, body: activateWithOverride })).code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.equal((await expectStatus(409, activationPath(purchaseId), adminWrite({}))).code, 'MEMBERSHIP_ALREADY_ACTIVATED');
+  const events = await migrator.auditLog.findMany({ where: { action: 'MEMBERSHIP_ACTIVATED', targetId: membership.id } });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].targetType, 'MEMBERSHIP');
+  assert.equal(events[0].actorId, users.admin.id);
+  assert.equal(events[0].reason, null);
+  assert.deepEqual(events[0].redactedDetails, {
+    purchaseId, membershipId: membership.id, purchaseType: 'POSITIVE_PRICE', activatedAt: membership.activatedAt,
+    validFrom: firstDay, validThrough: finalDay, initialSessionAllowance: 2, fundingStatus: 'FULLY_FUNDED',
+    allocatedAmount: '25.00', remainingAmount: '0.00', overrideUsed: false,
+  });
+  assert.equal(await migrator.membership.count({ where: { purchaseId } }), 1);
+  await assert.rejects(runtime.membership.create({ data: { purchaseId } }), { code: 'P2002' });
+});
+
+for (const [status, amount, remaining] of [['PARTIALLY_FUNDED', '8.00', '17.00'], ['UNFUNDED', null, '25.00']]) {
+  test(`Admin activation of a ${status} purchase requires an explicit override with a reason`, async () => {
+    const { purchaseId } = await allocationPurchase();
+    const path = activationPath(purchaseId);
+    const payment = await verifiedPayment();
+    if (amount) await expectStatus(201, allocationPath(payment.id), allocationRequest(purchaseId, amount));
+    assert.equal((await expectStatus(409, path, adminWrite({}))).code, 'ACTIVATION_OVERRIDE_REQUIRED');
+    assert.equal((await expectStatus(409, path, adminWrite({ overrideReason: 'Please approve' }))).code, 'ACTIVATION_OVERRIDE_REQUIRED');
+    for (const body of [{ override: true }, { override: true, overrideReason: ' ' }, { override: true, overrideReason: '…' }]) {
+      assert.equal((await expectStatus(400, path, adminWrite(body))).code, 'ACTIVATION_OVERRIDE_REASON_REQUIRED');
+    }
+    for (const body of [undefined, [], { override: 'true' },
+      ...[null, 4, 'a'.repeat(501), 'a\u0000b'].map(overrideReason => ({ override: true, overrideReason }))]) {
+      assert.equal((await expectStatus(400, path, adminWrite(body))).code, 'INVALID_INPUT');
+    }
+    assert.equal(await migrator.membership.count({ where: { purchaseId } }), 0);
+    const write = adminWrite(activateWithOverride);
+    const result = await expectStatus(200, path, write);
+    const reason = activateWithOverride.overrideReason.trim();
+    assert.equal(result.fundingStatus, status);
+    assert.equal(result.overrideUsed, true);
+    assert.equal(result.overrideReason, reason);
+    const event = await migrator.auditLog.findFirstOrThrow({ where: { action: 'MEMBERSHIP_ACTIVATED', targetId: result.membership.id } });
+    assert.equal(event.reason, reason);
+    assert.equal(event.redactedDetails.remainingAmount, remaining);
+    await expectStatus(201, allocationPath(payment.id), allocationRequest(purchaseId, remaining));
+    assert.deepEqual(await expectStatus(200, path, write), result);
+  });
+}
+
+test('complimentary activation reuses the pending membership and creates no financial records', async () => {
+  const writeAcceptance = acceptanceRequest(await acceptanceOffer());
+  const accepted = await expectStatus(201, complimentaryPath, writeAcceptance);
+  const { purchaseId } = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { id: accepted.acceptanceId } });
+  const counts = () => Promise.all([migrator.payment.count(), migrator.paymentAllocation.count(), migrator.membership.count()]);
+  const before = await counts();
+  const path = activationPath(purchaseId);
+  const admin = { access: sessions.admin.accessToken };
+  assert.deepEqual(await expectStatus(200, membershipStatePath(purchaseId), admin), {
+    membershipId: accepted.membershipId, status: 'PENDING_ACTIVATION',
+  });
+  const write = adminWrite({});
+  const result = await expectStatus(200, path, write);
+  assert.equal(result.membership.id, accepted.membershipId);
+  assert.equal(result.purchaseType, 'COMPLIMENTARY');
+  assert.equal(result.fundingStatus, 'FULLY_FUNDED');
+  assert.equal(result.overrideUsed, false);
+  assert.equal(result.overrideReason, undefined);
+  assert.deepEqual(await counts(), before);
+  assert.deepEqual(await expectStatus(201, complimentaryPath, writeAcceptance), accepted);
+  await migrator.membership.update({ where: { id: accepted.membershipId }, data: {
+    activatedAt: new Date('2026-01-01T09:00:00Z'), validFrom: new Date('2026-01-01'), validThrough: new Date('2026-01-14'),
+  } });
+  assert.deepEqual(await expectStatus(200, membershipStatePath(purchaseId), admin), {
+    membershipId: accepted.membershipId, status: 'EXPIRED',
+  });
+  assert.equal((await expectStatus(409, path, adminWrite({}))).code, 'MEMBERSHIP_ALREADY_ACTIVATED');
+  assert.deepEqual(await expectStatus(200, path, write), result);
+});
+
+test('membership activation denies unauthenticated, Staff with grants, Coach, and Client requests', async () => {
+  const { purchaseId } = await allocationPurchase();
+  const path = activationPath(purchaseId);
+  const assigned = ['payment.record', 'purchase.read', 'finance.read'];
+  for (const grant of assigned) await expectStatus(204, `/staff-grants/${users.staff.id}/${grant}`, grantOptions(true));
+  const legacy = await migrator.staffGrant.findUniqueOrThrow({
+    where: { staffUserId_permission: { staffUserId: users.staff.id, permission: 'MEMBERSHIP_ACTIVATE' } },
+  });
+  assert.equal(legacy.revokedAt, null);
+  try {
+    assert.equal((await expectStatus(401, path, { ...adminWrite({}), access: undefined })).code, 'UNAUTHENTICATED');
+    for (const role of ['staff', 'coach', 'client']) {
+      const access = sessions[role].accessToken;
+      assert.equal((await expectStatus(403, path, { ...adminWrite(activateWithOverride), access })).code, 'FORBIDDEN');
+      assert.equal((await expectStatus(403, membershipStatePath(purchaseId), { access })).code, 'FORBIDDEN');
+    }
+    assert.equal((await expectStatus(400, path, { ...adminWrite({}), key: undefined })).code, 'INVALID_IDEMPOTENCY_KEY');
+    assert.equal((await expectStatus(404, activationPath(randomUUID()), adminWrite({}))).code, 'PURCHASE_NOT_FOUND');
+    assert.equal(await migrator.membership.count({ where: { purchaseId } }), 0);
+  } finally {
+    for (const grant of assigned) await expectStatus(204, `/staff-grants/${users.staff.id}/${grant}`, grantOptions(false));
+  }
+});
+
+test('concurrent activation commands create one membership and concurrent idempotent retries share the outcome', async () => {
+  const { purchaseId } = await allocationPurchase();
+  const path = activationPath(purchaseId);
+  const first = adminWrite(activateWithOverride);
+  const second = { ...adminWrite(activateWithOverride), access: sessions.raceAdmin.accessToken };
+  const [a, b, c] = await Promise.all([request(path, first), request(path, first), request(path, second)]);
+  assert.equal(a.status, b.status);
+  const [aBody, bBody, cBody] = await Promise.all([a.json(), b.json(), c.json()]);
+  assert.deepEqual([a.status, c.status].sort(), [200, 409], JSON.stringify({ aBody, bBody, cBody }));
+  if (a.status === 200) assert.deepEqual(aBody, bBody);
+  assert.equal((a.status === 409 ? aBody : cBody).code, 'MEMBERSHIP_ALREADY_ACTIVATED');
+  const member = await migrator.membership.findUniqueOrThrow({ where: { purchaseId } });
+  assert.equal(await migrator.auditLog.count({ where: { action: 'MEMBERSHIP_ACTIVATED', targetId: member.id } }), 1);
+  const winner = a.status === 200 ? first : second;
+  const winningBody = a.status === 200 ? aBody : cBody;
+  assert.deepEqual(await Promise.all([expectStatus(200, path, winner), expectStatus(200, path, winner)]), [winningBody, winningBody]);
+});
+
+test('activation and its idempotency claim roll back if membership audit persistence fails', async () => {
+  const alternatives = [await allocationPurchase()];
+  const complimentary = await expectStatus(201, complimentaryPath, acceptanceRequest(await acceptanceOffer()));
+  alternatives.push(await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { id: complimentary.acceptanceId } }));
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_activation_audit
+    CHECK (action <> 'MEMBERSHIP_ACTIVATED') NOT VALID`;
+  const attempts = [];
+  try {
+    for (const { purchaseId } of alternatives) {
+      const path = activationPath(purchaseId);
+      const before = await migrator.membership.findUnique({ where: { purchaseId } });
+      const write = adminWrite(before ? {} : activateWithOverride);
+      attempts.push([path, write]);
+      assert.equal((await expectStatus(500, path, write)).code, 'INTERNAL_ERROR');
+      assert.deepEqual(await migrator.membership.findUnique({ where: { purchaseId } }), before);
+      assert.equal(await migrator.idempotencyKey.count({ where: { key: write.key } }), 0);
+    }
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_activation_audit`;
+  }
+  for (const [path, write] of attempts) await expectStatus(200, path, write);
+});
+
+test('activation waits for a committing allocation and uses its post-lock funding status', async () => {
+  const { purchaseId } = await allocationPurchase();
+  const payment = await verifiedPayment();
+  const path = activationPath(purchaseId);
+  assert.equal((await expectStatus(200, fundingPath(purchaseId), { access: sessions.admin.accessToken })).fundingStatus, 'UNFUNDED');
+  let attempt;
+  try {
+    await runtime.$transaction(async tx => {
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
+      await tx.$executeRaw`INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+        VALUES (${payment.id}::uuid, ${purchaseId}::uuid, 25.00, ${users.admin.id}::uuid)`;
+      attempt = request(path, adminWrite(activateWithOverride));
+      const deadline = Date.now() + 1200;
+      while (Date.now() < deadline) {
+        const [{ waiting }] = await owner.$queryRaw`SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+          WHERE datname = ${databaseName} AND usename = 'studio_api'
+            AND ${pid} = ANY(pg_blocking_pids(pid)) AND query LIKE '%lock_purchase_for_activation%') AS waiting`;
+        if (waiting) return;
+        await delay(15);
+      }
+      assert.fail('Activation did not wait for the allocation transaction');
+    });
+  } finally {
+    await attempt;
+  }
+  const response = await attempt;
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.fundingStatus, 'FULLY_FUNDED');
+  assert.equal(result.overrideUsed, false);
+  assert.equal(result.overrideReason, undefined);
+  const event = await migrator.auditLog.findFirstOrThrow({ where: { action: 'MEMBERSHIP_ACTIVATED', targetId: result.membership.id } });
+  assert.equal(event.reason, null);
+});
+
+test('activation rejects overfunding, malformed snapshots and purchases without acceptance evidence', async () => {
+  const { purchaseId } = await allocationPurchase();
+  const path = activationPath(purchaseId);
+  const payment = await verifiedPayment();
+  await expectStatus(201, allocationPath(payment.id), allocationRequest(purchaseId, '25.01'));
+  assert.equal((await expectStatus(409, path, adminWrite(activateWithOverride))).code, 'PURCHASE_OVERFUNDED');
+  await migrator.$executeRaw`UPDATE purchase SET terms = jsonb_set(terms, '{price}', '25'::jsonb) WHERE id = ${purchaseId}::uuid`;
+  assert.equal((await expectStatus(500, path, adminWrite({}))).code, 'INTERNAL_ERROR');
+  await migrator.purchaseAcceptance.delete({ where: { purchaseId } });
+  assert.equal((await expectStatus(409, path, adminWrite({}))).code, 'MEMBERSHIP_NOT_ELIGIBLE');
+  assert.equal(await migrator.membership.count({ where: { purchaseId } }), 0);
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {

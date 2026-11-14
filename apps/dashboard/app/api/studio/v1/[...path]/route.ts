@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
 import { clientQuery, clientRoute, isClientRelayPath, readClientRoute } from '../../../../../lib/client-relay';
-import { purchaseFundingRelay } from '../../../../../lib/purchase-funding-relay';
+import { purchaseRelay } from '../../../../../lib/purchase-funding-relay';
 import { accessCookie, api, refreshCookie, reply, trustedOrigin, validCsrf } from '../../../../../lib/session';
 
 type Route = { params: Promise<{ path: string[] }> };
@@ -15,7 +15,7 @@ function rejectedClientRequest(parts: string[]) {
 
 async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST' | 'PATCH') {
   const { path: parts } = await route.params;
-  if (parts[0] === 'purchases') return purchaseFundingRelay(request, parts);
+  if (parts[0] === 'purchases') return purchaseRelay(request, parts);
   const legacy = method === 'GET' && parts.length === 1 && parts[0] === 'me' ? 'me'
     : method === 'POST' && parts.length === 2 && parts[0] === 'auth' && parts[1] === 'socket-ticket' ? 'auth/socket-ticket' : null;
   const catalog = catalogRoute(method, parts);
@@ -72,7 +72,7 @@ export function HEAD(request: NextRequest, route: Route) {
 
 export async function OPTIONS(request: NextRequest, route: Route) {
   const { path } = await route.params;
-  if (path[0] === 'purchases') return purchaseFundingRelay(request, path);
+  if (path[0] === 'purchases') return purchaseRelay(request, path);
   if (isClientRelayPath(path)) return rejectedClientRequest(path);
   return new NextResponse(null, { status: 204, headers: { Allow: 'GET, HEAD, OPTIONS, PATCH, POST' } });
 }
@@ -87,7 +87,7 @@ export function PATCH(request: NextRequest, route: Route) {
 
 export async function PUT(request: NextRequest, route: Route) {
   const { path } = await route.params;
-  if (path[0] === 'purchases') return purchaseFundingRelay(request, path);
+  if (path[0] === 'purchases') return purchaseRelay(request, path);
   return isClientRelayPath(path) ? rejectedClientRequest(path) : new NextResponse(null, { status: 405 });
 }
 

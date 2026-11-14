@@ -20,7 +20,7 @@ Sockets use short-lived, single-use tickets minted through authenticated REST. B
 
 ## Route families
 
-All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The public catalog, purchase acceptance, purchase funding, payment recording, payment verification, and payment allocation routes below are implemented. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
+All paths below are relative to `/api/v1`. The named actions are the permission-matrix actions. The implemented commercial routes include the public catalog, purchase acceptance and funding, payment recording, verification and allocation, and purchase-scoped membership activation. Other commercial bindings are proposals. No unlisted route inherits access from a parent route.
 
 | Family | Endpoint and action |
 |---|---|
@@ -89,6 +89,16 @@ The price comes from the frozen terms at acceptance. The allocated amount is the
 - `FULLY_FUNDED` applies when allocations equal the price, including a complimentary SAR 0 Purchase with zero allocations.
 
 An invalid UUID returns `400 INVALID_INPUT`. An unknown Purchase returns `404 PURCHASE_NOT_FOUND`. If allocations exceed the frozen price, the API returns `409 PURCHASE_OVERFUNDED`. Malformed frozen terms return `500 INTERNAL_ERROR`. This read creates no audit event, writes no financial records, and never activates a Membership.
+
+## Implemented membership activation
+
+`GET /purchases/{purchaseId}/membership` requires Admin access and returns `membershipId` and `status`. A positive-price accepted Purchase awaiting membership creation returns `NOT_CREATED`. A complimentary Purchase issued with a pending Membership returns `PENDING_ACTIVATION`. The read also reports `ACTIVE`, `EXPIRED`, or `INELIGIBLE`.
+
+`POST /purchases/{purchaseId}/activate-membership` requires the Admin-only `membership.activate` action and an `Idempotency-Key`. Send an empty JSON object for a fully funded or complimentary Purchase. For a positive-price Purchase with a balance due, send `override: true` and an `overrideReason` with up to 500 characters. The command uses the current Purchase Funding calculation under lock. If funding became complete before approval, it proceeds without recording an override.
+
+Activation reuses the pending complimentary Membership or creates the single Membership for a positive-price Purchase. The Riyadh date of approval is the first day of the frozen validity period. `validThrough` includes the entire final Riyadh day. A session package gets its frozen initial allowance once. The audit event records the Admin, Purchase, Membership, approval instant, funding, and any override used. Activation and audit commit together. A same-key retry with the original payload returns the original activation response even if funding or eligibility later changes.
+
+Success returns `200` with the activated `membership`, `purchaseType`, `fundingStatus`, and `overrideUsed`, plus `overrideReason` when applied. A balance due without an override returns `409 ACTIVATION_OVERRIDE_REQUIRED`. A missing or blank reason for an explicit override returns `400 ACTIVATION_OVERRIDE_REASON_REQUIRED`. An already activated Membership returns `409 MEMBERSHIP_ALREADY_ACTIVATED`. An ineligible Purchase or Membership returns `409 MEMBERSHIP_NOT_ELIGIBLE`. Changed input with an existing key returns `409 IDEMPOTENCY_KEY_REUSED`. Funding integrity errors use the funding read's error codes.
 
 ## Implemented payment recording
 
