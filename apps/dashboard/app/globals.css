@@ -218,3 +218,11 @@ textarea { resize: vertical; }
 .membership-activation, .activation-confirmation { display: grid; gap: 12px; }
 .activation-override { display: flex; align-items: center; gap: 8px; }
 .activation-reason { display: grid; gap: 5px; max-width: 520px; }
+
+.schedule-panel, .schedule-editor { display: grid; gap: 14px; padding: 18px; }
+.schedule-panel form { gap: 12px; }
+.schedule-panel form:not(.button-row) { display: grid; justify-items: start; }
+.schedule-panel label { display: grid; gap: 4px; justify-self: start; }
+.schedule-panel .button-row { align-items: end; }
+.schedule-editor { border: 1px solid var(--line); border-radius: 9px; }
+.schedule-table { overflow-x: auto; }

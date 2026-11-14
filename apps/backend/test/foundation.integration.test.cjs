@@ -670,7 +670,7 @@ test('a failed acceptance audit rolls back issuance and leaves its idempotency k
   assert.deepEqual(await acceptanceCounts(), before.map(count => count + 1));
 });
 
-test('payment and membership migrations preserve historical purchases, receipts, allocations and replay across upgrades', async () => {
+test('payment, membership and scheduling migrations preserve historical records and replay across upgrades', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'studio-purchase-upgrade-'));
   const legacySchema = join(scratch, 'schema.prisma');
   const { api, migration } = disposableUrls();
@@ -809,8 +809,9 @@ test('payment and membership migrations preserve historical purchases, receipts,
       INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
       VALUES (${legacyPaymentId}::uuid, ${paidId}::uuid, 25.00, ${admin.id}::uuid)
       RETURNING to_jsonb(payment_allocation) AS record`;
-    deployMigrations(api, migration);
-    deployMigrations(api, migration);
+    const activationMigration = '20261114000100_membership_activation';
+    cpSync(join(prismaDirectory, 'migrations', activationMigration), join(scratch, 'migrations', activationMigration), { recursive: true });
+    deployMigrations(api, migration, legacySchema);
     const { created_at: originalMembershipCreated, ...pendingRecord } = pendingBefore.record;
     assert.deepEqual(new Date(originalMembershipCreated), acceptedAt);
     assert.deepEqual(pendingRecord, { id: membershipId, purchase_id: originalPurchase.id,
@@ -875,6 +876,25 @@ test('payment and membership migrations preserve historical purchases, receipts,
     const acceptanceReplay = await upgradedPost(complimentaryPath, body, retry.key);
     assert.equal(acceptanceReplay.status, 201);
     assert.deepEqual(await acceptanceReplay.json(), { acceptanceId, membershipId, status: 'PENDING_ACTIVATION' });
+
+    const snapshot = () => Promise.all([
+      upgradeDb.purchase.findMany({ orderBy: { id: 'asc' } }),
+      upgradeDb.purchaseAcceptance.findMany({ orderBy: { id: 'asc' } }),
+      upgradeDb.membership.findMany({ orderBy: { id: 'asc' } }),
+      upgradeDb.payment.findMany({ orderBy: { id: 'asc' } }),
+      upgradeDb.paymentAllocation.findMany({ orderBy: { id: 'asc' } }),
+      upgradeDb.auditLog.findMany({ orderBy: { id: 'asc' } }),
+      upgradeDb.idempotencyKey.findMany({ orderBy: { id: 'asc' } }),
+      upgradeDb.sessionType.findMany({ orderBy: { id: 'asc' } }),
+    ]);
+    const beforeScheduling = await snapshot();
+    await upgradeApp.close();
+    upgradeApp = undefined;
+    deployMigrations(api, migration);
+    deployMigrations(api, migration);
+    assert.deepEqual(await snapshot(), beforeScheduling);
+    assert.equal(await upgradeDb.scheduledSession.count(), 0);
+    assert.equal(await upgradeDb.schedulingSettings.count(), 0);
 
     // Model a future type only in this disposable database.
     await upgradeDb.$executeRaw`ALTER TYPE purchase_type ADD VALUE 'TEST_REPEATABLE'`;
@@ -1951,6 +1971,215 @@ test('activation rejects overfunding, malformed snapshots and purchases without 
   await migrator.purchaseAcceptance.delete({ where: { purchaseId } });
   assert.equal((await expectStatus(409, path, adminWrite({}))).code, 'MEMBERSHIP_NOT_ELIGIBLE');
   assert.equal(await migrator.membership.count({ where: { purchaseId } }), 0);
+});
+
+const schedulePath = '/scheduling/sessions';
+const scheduleDate = (minutes = 0) => new Date(Date.now() + 48 * 3600_000 + minutes * 60_000).toISOString();
+const scheduleQuery = () => '?from=' + encodeURIComponent(scheduleDate(-1440)) + '&until=' + encodeURIComponent(scheduleDate(1440));
+const scheduleWrite = (body, method = 'POST') => ({ ...adminWrite(body), method });
+const scheduleDefaults = { durationMinutes: 60, bufferMinutes: 10, groupCapacity: 6 };
+const adminRead = () => ({ access: sessions.admin.accessToken });
+
+async function schedulingFixture({ mode = 'GROUP', configure = true } = {}) {
+  const { sessionTypeId } = await expectStatus(201, '/session-types', adminWrite({
+    name: 'Schedule fixture', code: 'SCHED-' + randomBytes(5).toString('hex'), mode,
+  }));
+  const settingsPath = '/scheduling/settings/' + sessionTypeId;
+  if (configure) await expectStatus(204, settingsPath, scheduleWrite({
+    ...scheduleDefaults, groupCapacity: mode === 'GROUP' ? 6 : null,
+  }, 'PATCH'));
+  return { sessionTypeId, settingsPath };
+}
+
+async function additionalCoach() {
+  return migrator.user.create({ data: {
+    role: 'COACH', normalizedEmail: randomUUID() + '@coach.example', accountState: 'ACTIVE',
+    emailVerifiedAt: new Date(), coach: { create: { displayName: 'Other coach' } },
+  } });
+}
+
+test('scheduling authorization scopes Coaches to themselves and denies Staff even with scheduling grants', async () => {
+  const { sessionTypeId, settingsPath } = await schedulingFixture();
+  const other = await additionalCoach();
+  const start = scheduleDate();
+  const body = { sessionTypeId, coachId: users.coach.id, startsAt: start };
+  const { sessionId } = await expectStatus(201, schedulePath, adminWrite(body));
+  const another = await expectStatus(201, schedulePath, adminWrite({ ...body, coachId: other.id }));
+  const q = scheduleQuery();
+  const self = '/scheduling/my-sessions' + q;
+  await expectStatus(401, self);
+  const coach = { access: sessions.coach.accessToken };
+  const listing = await expectStatus(200, self, coach);
+  assert.deepEqual(listing.items.map(row => row.id), [sessionId]);
+  assert.deepEqual(Object.keys(listing.items[0].coach).sort(), ['displayName', 'id']);
+  await expectStatus(400, self + '&coachId=' + other.id, coach);
+  await expectStatus(400, self + '&after=' + another.sessionId, coach);
+  const adminList = await expectStatus(200, schedulePath + q + '&coachId=' + other.id, adminRead());
+  assert.deepEqual(adminList.items.map(row => row.id), [another.sessionId]);
+  const page = await expectStatus(200, schedulePath + q + '&limit=1', adminRead());
+  assert.equal(page.items.length, 1);
+  const next = await expectStatus(200, schedulePath + q + '&limit=1&after=' + page.nextCursor, adminRead());
+  assert.equal(next.items.length, 1);
+  assert.notEqual(page.items[0].id, next.items[0].id);
+  const coaches = await expectStatus(200, '/scheduling/coaches', adminRead());
+  assert(coaches.some(row => row.id === other.id));
+  assert(!coaches.some(row => row.id === users.client.id));
+
+  for (const permission of ['schedule.read', 'schedule.manage']) {
+    await expectStatus(204, '/staff-grants/' + users.staff.id + '/' + permission, grantOptions(true));
+  }
+  for (const role of ['coach', 'staff', 'client']) {
+    const access = sessions[role].accessToken;
+    for (const path of [schedulePath + q, '/scheduling/coaches', '/scheduling/settings']) await expectStatus(403, path, { access });
+    await expectStatus(403, schedulePath, { ...adminWrite(body), access });
+    await expectStatus(403, settingsPath, { ...scheduleWrite(scheduleDefaults, 'PATCH'), access });
+    await expectStatus(403, schedulePath + '/' + sessionId, { ...scheduleWrite(body, 'PATCH'), access });
+    await expectStatus(403, schedulePath + '/' + sessionId + '/cancel', { ...adminWrite({ reason: 'Test' }), access });
+    if (role !== 'coach') await expectStatus(403, self, { access });
+  }
+  for (const permission of ['schedule.read', 'schedule.manage']) {
+    await expectStatus(204, '/staff-grants/' + users.staff.id + '/' + permission, grantOptions(false));
+  }
+  for (const id of [sessionId, another.sessionId]) {
+    await expectStatus(204, schedulePath + '/' + id + '/cancel', adminWrite({ expectedRevision: 1, reason: 'Fixture complete' }));
+  }
+});
+
+test('scheduling validates defaults, references, timestamps and revision and replays idempotent writes', async () => {
+  const { sessionTypeId, settingsPath } = await schedulingFixture({ mode: 'INDIVIDUAL', configure: false });
+  const body = { sessionTypeId, coachId: users.coach.id, startsAt: scheduleDate(200) };
+  for (const invalid of [
+    { durationMinutes: 0, bufferMinutes: 0 }, { durationMinutes: 30, bufferMinutes: -1 },
+    { durationMinutes: 30, bufferMinutes: 1, groupCapacity: 2 }, { durationMinutes: '30', bufferMinutes: 1 },
+  ]) await expectStatus(400, settingsPath, scheduleWrite(invalid, 'PATCH'));
+  const group = await schedulingFixture({ configure: false });
+  await expectStatus(400, group.settingsPath, scheduleWrite({ durationMinutes: 60, bufferMinutes: 10 }, 'PATCH'));
+  assert.equal((await expectStatus(409, schedulePath, adminWrite(body))).code, 'SCHEDULING_SETTINGS_REQUIRED');
+  const config = scheduleWrite({ durationMinutes: 30, bufferMinutes: 5 }, 'PATCH');
+  await expectStatus(204, settingsPath, config);
+  await expectStatus(204, settingsPath, config);
+  assert.equal(await migrator.auditLog.count({ where: { targetId: sessionTypeId, action: 'SCHEDULING_SETTINGS_CHANGED' } }), 1);
+  assert.equal((await expectStatus(409, schedulePath, adminWrite({ ...body, coachId: users.client.id }))).code, 'COACH_NOT_ELIGIBLE');
+  await expectStatus(404, schedulePath, adminWrite({ ...body, sessionTypeId: randomUUID() }));
+  const disabled = await additionalCoach();
+  await migrator.user.update({ where: { id: disabled.id }, data: { accountState: 'DISABLED' } });
+  await expectStatus(409, schedulePath, adminWrite({ ...body, coachId: disabled.id }));
+  await expectStatus(409, schedulePath, adminWrite({ ...body, startsAt: '2025-01-01T09:00:00+03:00' }));
+  for (const startsAt of ['2028-02-30T09:00:00+03:00', '2030-03-15T09:00:00']) {
+    await expectStatus(400, schedulePath, adminWrite({ ...body, startsAt }));
+  }
+  await expectStatus(400, schedulePath, { ...adminWrite(body), key: undefined });
+  const intent = adminWrite(body);
+  const result = await expectStatus(201, schedulePath, intent);
+  assert.deepEqual(await expectStatus(201, schedulePath, intent), result);
+  assert.equal((await expectStatus(409, schedulePath, { ...intent, body: { ...body, startsAt: scheduleDate(260) } })).code, 'IDEMPOTENCY_KEY_REUSED');
+  const row = await migrator.scheduledSession.findUniqueOrThrow({ where: { id: result.sessionId } });
+  assert.equal(row.capacity, 1);
+  assert.equal(row.endsAt - row.startsAt, 30 * 60_000);
+  assert.equal(row.bufferMinutes, 5);
+  assert.equal(await migrator.auditLog.count({ where: { targetId: row.id, action: 'SCHEDULED_SESSION_CREATED' } }), 1);
+  await expectStatus(204, schedulePath + '/' + row.id + '/cancel', adminWrite({ expectedRevision: 1, reason: 'Fixture complete' }));
+  await expectStatus(204, '/session-types/' + sessionTypeId + '/archive', adminWrite({ reason: 'Fixture done' }));
+  assert.equal((await expectStatus(409, schedulePath, adminWrite(body))).code, 'SESSION_TYPE_ARCHIVED');
+});
+
+test('buffer snapshots, half-open boundary, editing, reassignment and cancellation use the PostgreSQL constraint', async () => {
+  const { sessionTypeId, settingsPath } = await schedulingFixture();
+  const other = await additionalCoach();
+  const start = Date.parse(scheduleDate(400));
+  const schedule = (minute, coachId = users.coach.id) => ({ sessionTypeId, coachId, startsAt: new Date(start + minute * 60_000).toISOString() });
+  const first = await expectStatus(201, schedulePath, adminWrite(schedule(0)));
+  const firstPath = schedulePath + '/' + first.sessionId;
+  await expectStatus(204, settingsPath, scheduleWrite({ durationMinutes: 30, bufferMinutes: 0, groupCapacity: 9 }, 'PATCH'));
+  for (const minute of [30, 60, 69]) {
+    assert.equal((await expectStatus(409, schedulePath, adminWrite(schedule(minute)))).code, 'COACH_SCHEDULE_CONFLICT');
+  }
+  const second = await expectStatus(201, schedulePath, adminWrite(schedule(70)));
+  const [old, fresh] = await Promise.all([first, second].map(({ sessionId }) => migrator.scheduledSession.findUniqueOrThrow({ where: { id: sessionId } })));
+  assert.deepEqual([old.bufferMinutes, old.capacity, old.endsAt - old.startsAt], [10, 6, 60 * 60_000]);
+  assert.deepEqual([fresh.bufferMinutes, fresh.capacity, fresh.endsAt - fresh.startsAt], [0, 9, 30 * 60_000]);
+  const secondPath = schedulePath + '/' + second.sessionId;
+  const edit = (minute, coachId, expectedRevision = 1) => scheduleWrite({ coachId, expectedRevision, startsAt: schedule(minute).startsAt }, 'PATCH');
+  assert.equal((await expectStatus(409, secondPath, edit(65, users.coach.id))).code, 'COACH_SCHEDULE_CONFLICT');
+  const move = edit(10, other.id);
+  await expectStatus(204, secondPath, move);
+  await expectStatus(204, secondPath, move);
+  assert.equal((await expectStatus(409, secondPath, edit(10, other.id))).code, 'SCHEDULED_SESSION_CHANGED');
+  assert.equal((await expectStatus(409, firstPath, edit(0, other.id))).code, 'COACH_SCHEDULE_CONFLICT');
+  const editAudit = await migrator.auditLog.findFirstOrThrow({ where: { targetId: fresh.id, action: 'SCHEDULED_SESSION_EDITED' } });
+  assert.equal(editAudit.redactedDetails.previousCoachId, users.coach.id);
+  assert.equal(editAudit.redactedDetails.coachId, other.id);
+  const moved = await migrator.scheduledSession.findUniqueOrThrow({ where: { id: fresh.id } });
+  assert.equal(moved.revision, 2);
+  assert.equal(moved.endsAt - moved.startsAt, 30 * 60_000);
+  await expectStatus(400, firstPath + '/cancel', adminWrite({ expectedRevision: 1, reason: '  ' }));
+  const cancel = adminWrite({ expectedRevision: 1, reason: ' Coach unavailable ' });
+  await expectStatus(204, firstPath + '/cancel', cancel);
+  await expectStatus(204, firstPath + '/cancel', cancel);
+  await expectStatus(409, firstPath, edit(0, other.id, 2));
+  const event = await migrator.auditLog.findFirstOrThrow({ where: { targetId: old.id, action: 'SCHEDULED_SESSION_CANCELLED' } });
+  assert.equal(event.reason, 'Coach unavailable');
+  assert.equal(event.actorId, users.admin.id);
+  await expectStatus(201, schedulePath, adminWrite(schedule(0)));
+  await assert.rejects(runtime.$executeRaw`INSERT INTO scheduled_session
+    (session_type_id, coach_id, starts_at, ends_at, buffer_minutes, capacity)
+    VALUES (${sessionTypeId}::uuid, ${users.coach.id}::uuid, ${old.startsAt}, ${old.endsAt}, 0, 1)`,
+  error => error.code === 'P2010' && error.meta?.code === '23P01' && /scheduled_session_coach_overlap/.test(error.meta.message));
+});
+
+test('concurrent Admin scheduling allows one conflicting write and audit failure rolls back the session and key', async () => {
+  const { sessionTypeId } = await schedulingFixture();
+  const coach = await additionalCoach();
+  const body = { sessionTypeId, coachId: coach.id, startsAt: scheduleDate(600) };
+  const writes = await Promise.all([
+    request(schedulePath, adminWrite(body)),
+    request(schedulePath, { ...adminWrite(body), access: sessions.raceAdmin.accessToken }),
+  ]);
+  assert.deepEqual(writes.map(response => response.status).sort(), [201, 409]);
+  assert.equal((await writes.find(response => response.status === 409).json()).code, 'COACH_SCHEDULE_CONFLICT');
+  assert.equal(await migrator.scheduledSession.count({ where: { coachId: coach.id } }), 1);
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_scheduling_audit
+    CHECK (action <> 'SCHEDULED_SESSION_CREATED') NOT VALID`;
+  const retry = adminWrite({ ...body, startsAt: scheduleDate(800) });
+  try {
+    assert.equal((await expectStatus(500, schedulePath, retry)).code, 'INTERNAL_ERROR');
+    assert.equal(await migrator.scheduledSession.count({ where: { coachId: coach.id } }), 1);
+    assert.equal(await migrator.idempotencyKey.count({ where: { key: retry.key } }), 0);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_scheduling_audit`;
+  }
+  await expectStatus(201, schedulePath, retry);
+
+  // Exercise the exclusion constraint concurrently without the command's coach lock.
+  const startsAt = new Date(scheduleDate(1000));
+  const endsAt = new Date(startsAt.valueOf() + 60 * 60_000);
+  const insert = tx => tx.$executeRaw`INSERT INTO scheduled_session
+    (session_type_id, coach_id, starts_at, ends_at, buffer_minutes, capacity)
+    VALUES (${sessionTypeId}::uuid, ${coach.id}::uuid, ${startsAt}, ${endsAt}, 10, 6)`;
+  let competing;
+  try {
+    await runtime.$transaction(async tx => {
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
+      await insert(tx);
+      competing = insert(runtime).then(() => null, error => error);
+      const deadline = Date.now() + 1200;
+      while (Date.now() < deadline) {
+        const [{ waiting }] = await owner.$queryRaw`SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+          WHERE datname = ${databaseName} AND usename = 'studio_api'
+            AND ${pid} = ANY(pg_blocking_pids(pid)) AND query LIKE '%INSERT INTO scheduled_session%') AS waiting`;
+        if (waiting) return;
+        await delay(15);
+      }
+      assert.fail('The concurrent insert must wait for the exclusion constraint');
+    });
+  } finally {
+    await competing;
+  }
+  const rejected = await competing;
+  assert.equal(rejected?.meta?.code, '23P01');
+  const session = await migrator.scheduledSession.findFirstOrThrow({ where: { coachId: coach.id, startsAt } });
+  await assert.rejects(runtime.scheduledSession.update({ where: { id: session.id }, data: { bufferMinutes: 0 } }));
+  await assert.rejects(runtime.scheduledSession.delete({ where: { id: session.id } }));
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {

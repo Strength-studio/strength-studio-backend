@@ -902,6 +902,140 @@ test('Membership activation in Chrome reports stale funding and can refresh befo
   });
 });
 
+const schedulingPage = '/scheduling';
+const scheduleApi = 'scheduling/sessions';
+const nextSessionTime = (minutes = 0) => new Date(Date.now() + 48 * 3600_000 + minutes * 60_000).toISOString();
+const scheduleWindow = () => '?from=' + encodeURIComponent(nextSessionTime(-1440)) + '&until=' + encodeURIComponent(nextSessionTime(1440));
+
+async function dashboardScheduleFixture(admin) {
+  const { sessionTypeId } = await relay(admin, 201, 'session-types', {
+    method: 'POST', payload: { code: 'DASH-SCHED-' + randomUUID().slice(0, 8), name: 'Schedule fixture', mode: 'GROUP' },
+  });
+  const coach = await fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email('coach') } });
+  return { sessionTypeId, coachId: coach.id };
+}
+
+test('Scheduling relay and Admin workspace support settings, assignment, editing, conflicts and cancellation', async () => {
+  const admin = await signIn('admin');
+  const { sessionTypeId, coachId } = await dashboardScheduleFixture(admin);
+  const settingsPath = 'scheduling/settings/' + sessionTypeId;
+  const q = scheduleWindow();
+  const body = { sessionTypeId, coachId, startsAt: nextSessionTime() };
+  const settings = { method: 'PATCH', payload: { durationMinutes: 60, bufferMinutes: 10, groupCapacity: 6 } };
+  const create = { method: 'POST', payload: body };
+  const page = await fetch(origin + schedulingPage, { headers: { cookie: admin.cookie } });
+  assert.match(await page.text(), /Scheduling settings/);
+  const before = upstreamRequests;
+  assert.deepEqual(await relay(admin, 403, settingsPath, { ...settings, source: 'https://invalid.example' }), { code: 'CSRF_DENIED' });
+  assert.deepEqual(await relay(admin, 403, scheduleApi, { ...create, csrf: '' }), { code: 'CSRF_DENIED' });
+  assert.deepEqual(await relay(admin, 400, scheduleApi, { ...create, key: '' }), { code: 'INVALID_IDEMPOTENCY_KEY' });
+  assert.deepEqual(await relay(admin, 404, 'scheduling/my-sessions' + q), { code: 'NOT_FOUND' });
+  assert.deepEqual(await relay(admin, 404, scheduleApi + '/bad-id/cancel', create), { code: 'NOT_FOUND' });
+  assert.deepEqual(await relay(admin, 400, scheduleApi + q + '&extra=yes'), { code: 'INVALID_INPUT' });
+  assert.equal(upstreamRequests, before);
+  await relay({ cookie: '' }, 401, scheduleApi + q);
+  for (const role of ['noGrant', 'coach', 'client']) {
+    const actor = await signIn(role);
+    const protectedPage = await fetch(origin + schedulingPage, { headers: { cookie: actor.cookie } });
+    const html = await protectedPage.text();
+    assert.match(html, /Your account does not have access to Scheduling/);
+    assert.doesNotMatch(html, /Scheduling settings/);
+    await relay(actor, 403, scheduleApi + q);
+    await relay(actor, 403, scheduleApi, create);
+  }
+
+  await relay(admin, 204, settingsPath, settings);
+  const defaults = await relay(admin, 200, 'scheduling/settings');
+  assert(defaults.some(row => row.sessionTypeId === sessionTypeId && row.bufferMinutes === 10));
+  const coaches = await relay(admin, 200, 'scheduling/coaches');
+  assert(coaches.some(row => row.id === coachId));
+  const { sessionId } = await relay(admin, 201, scheduleApi, create);
+  assert.equal((await relay(admin, 409, scheduleApi, create)).code, 'COACH_SCHEDULE_CONFLICT');
+  const idPath = scheduleApi + '/' + sessionId;
+  const startsAt = new Date(Date.parse(body.startsAt) + 20 * 60_000).toISOString();
+  await relay(admin, 204, idPath, { method: 'PATCH', payload: { coachId, startsAt, expectedRevision: 1 } });
+  const listing = await relay(admin, 200, scheduleApi + q + '&coachId=' + coachId);
+  const edited = listing.items.find(row => row.id === sessionId);
+  assert.equal(edited.startsAt, startsAt);
+  assert.equal(edited.revision, 2);
+  assert.equal(edited.bufferMinutes, 10);
+  await relay(admin, 204, idPath + '/cancel', { method: 'POST', payload: { expectedRevision: 2, reason: 'Schedule fixture changed' } });
+  assert.equal((await relay(admin, 200, scheduleApi + q)).items.find(row => row.id === sessionId).status, 'CANCELLED');
+});
+
+test('Scheduling in Chrome protects navigation and handles conflicts, cancellation and session expiry', browserTest, async () => {
+  const admin = await signIn('admin');
+  const { sessionTypeId, coachId } = await dashboardScheduleFixture(admin);
+  const startsAt = nextSessionTime(180);
+  await withChrome(origin, 'Schedule fixture', async browser => {
+    await browser.go('/');
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/');
+    await browser.until(`document.querySelector('nav a[href="/scheduling"]')`, 'Admin scheduling navigation');
+    await browser.evaluate(`document.querySelector('nav a[href="/scheduling"]').click(); true`);
+    const settingsSelect = 'document.querySelector("#settings-heading + label select:enabled")';
+    await browser.until(settingsSelect, 'settings type selection');
+    await browser.evaluate(`(() => {
+      const select = ${settingsSelect};
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, "${sessionTypeId}");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    })()`);
+    const settingsForm = `document.querySelector('form[aria-label="Scheduling settings"]')`;
+    await browser.until(settingsForm, 'settings form');
+    await browser.evaluate(`(() => {
+      const form = ${settingsForm};
+      form.elements.durationMinutes.value = "60";
+      form.elements.bufferMinutes.value = "10";
+      form.elements.groupCapacity.value = "7";
+      form.requestSubmit();
+      return true;
+    })()`);
+    const createButton = '[...document.querySelectorAll("button")].find(button => button.textContent === "Create session" && !button.disabled)';
+    const editor = `document.querySelector('form[aria-label="Session editor"]')`;
+    const localStart = new Date(Date.parse(startsAt) + 3 * 60 * 60_000).toISOString().slice(0, -1);
+    const create = async () => {
+      await browser.until(createButton, 'create session action');
+      await browser.evaluate(`${createButton}.click(); true`);
+      await browser.until(editor, 'session editor');
+      await browser.evaluate(`(() => {
+        const form = ${editor};
+        form.elements.sessionTypeId.value = "${sessionTypeId}";
+        form.elements.coachId.value = "${coachId}";
+        form.elements.startsAt.value = "${localStart}";
+        form.requestSubmit();
+        return true;
+      })()`);
+    };
+    await create();
+    await browser.until(`document.querySelector(".notice.success")?.textContent.includes("Session scheduled")`, 'creation success');
+    await create();
+    await browser.until(`document.querySelector("[role=alert]")?.textContent.includes("post-session buffer")`, 'conflict feedback');
+
+    const rowButton = text => `[...document.querySelectorAll(".schedule-table button")].find(button => !button.disabled && button.textContent === "${text}")`;
+    await browser.evaluate(`${rowButton('Edit')}.click(); true`);
+    await browser.until(`${editor}?.textContent.includes("Edit session")`, 'edit session');
+    const later = new Date(Date.parse(localStart + 'Z') + 30 * 60_000).toISOString().slice(0, -1);
+    await browser.evaluate(`(() => { const form = ${editor}; form.elements.startsAt.value = "${later}"; form.requestSubmit(); return true; })()`);
+    await browser.until(`document.querySelector(".notice.success")?.textContent.includes("Session updated")`, 'edit success');
+    await browser.until(rowButton('Cancel'), 'cancel session action');
+    await browser.evaluate(`${rowButton('Cancel')}.click(); true`);
+    await browser.until(`${editor}?.elements.reason`, 'cancel confirmation');
+    await browser.evaluate(`(() => { const form = ${editor}; form.elements.reason.value = "Coach unavailable"; form.requestSubmit(); return true; })()`);
+    await browser.until(`document.querySelector(".schedule-table")?.textContent.includes("Cancelled")`, 'cancellation success');
+
+    // Invalidate only the access cookie to exercise the 401 redirect with a refresh session still present.
+    await browser.setCookie(origin, '__Host-ss_access=invalid');
+    await browser.evaluate(`document.querySelector('form[aria-label="Schedule filters"]').requestSubmit(); true`);
+    await browser.until('location.pathname === "/" && location.search === "?session=expired"', 'expired scheduling session');
+    const staff = await signIn('noGrant');
+    for (const pair of staff.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go(schedulingPage);
+    await browser.until(`document.querySelector("[role=alert]")?.textContent.includes("does not have access to Scheduling")`, 'Staff page denial');
+    assert.equal(await browser.evaluate('document.querySelector("#settings-heading") === null'), true);
+  });
+});
+
 test('catalog relay returns a safe service unavailable response when the backend stops', async () => {
   const admin = await signIn('admin');
   await api.close();

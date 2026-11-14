@@ -1751,6 +1751,489 @@
           "Purchase funding"
         ]
       }
+    },
+    "/api/v1/scheduling/settings": {
+      "get": {
+        "operationId": "SchedulingController_settings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SchedulingSettingsViewDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List scheduling settings for active session types (Admin only)",
+        "tags": [
+          "Scheduling"
+        ]
+      }
+    },
+    "/api/v1/scheduling/settings/{sessionTypeId}": {
+      "patch": {
+        "operationId": "SchedulingController_setSettings",
+        "parameters": [
+          {
+            "name": "sessionTypeId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulingSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid scheduling input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Referenced session or session type not found"
+          },
+          "409": {
+            "description": "Coach schedule conflict, ineligible or changed record, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Set scheduling defaults for a session type (Admin only)",
+        "tags": [
+          "Scheduling"
+        ]
+      }
+    },
+    "/api/v1/scheduling/coaches": {
+      "get": {
+        "operationId": "SchedulingController_coaches",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EligibleCoachDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List eligible coaches (Admin only)",
+        "tags": [
+          "Scheduling"
+        ]
+      }
+    },
+    "/api/v1/scheduling/sessions": {
+      "get": {
+        "operationId": "SchedulingController_list",
+        "parameters": [
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "description": "Inclusive start filter.",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "required": true,
+            "in": "query",
+            "description": "Exclusive start filter.",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "coachId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulePageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid date range, coach, limit, or cursor"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List scheduled sessions by time window and optional coach (Admin only)",
+        "tags": [
+          "Scheduling"
+        ]
+      },
+      "post": {
+        "operationId": "SchedulingController_create",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScheduledSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledSessionCreatedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scheduling input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Referenced session or session type not found"
+          },
+          "409": {
+            "description": "Coach schedule conflict, ineligible or changed record, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Schedule a session and assign a coach (Admin only)",
+        "tags": [
+          "Scheduling"
+        ]
+      }
+    },
+    "/api/v1/scheduling/my-sessions": {
+      "get": {
+        "operationId": "SchedulingController_own",
+        "parameters": [
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "description": "Inclusive start filter.",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "required": true,
+            "in": "query",
+            "description": "Exclusive start filter.",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulePageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid date range, limit, or cursor"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the current Coach’s assigned sessions",
+        "tags": [
+          "Scheduling"
+        ]
+      }
+    },
+    "/api/v1/scheduling/sessions/{sessionId}": {
+      "patch": {
+        "operationId": "SchedulingController_edit",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditScheduledSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid scheduling input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Referenced session or session type not found"
+          },
+          "409": {
+            "description": "Coach schedule conflict, ineligible or changed record, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Move or reassign an upcoming session (Admin only)",
+        "tags": [
+          "Scheduling"
+        ]
+      }
+    },
+    "/api/v1/scheduling/sessions/{sessionId}/cancel": {
+      "post": {
+        "operationId": "SchedulingController_cancel",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelScheduledSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid scheduling input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Referenced session or session type not found"
+          },
+          "409": {
+            "description": "Coach schedule conflict, ineligible or changed record, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel an upcoming session with a reason (Admin only)",
+        "tags": [
+          "Scheduling"
+        ]
+      }
     }
   },
   "info": {
@@ -2700,6 +3183,235 @@
           "purchaseType",
           "fundingStatus",
           "overrideUsed"
+        ]
+      },
+      "SchedulingSettingsViewDto": {
+        "type": "object",
+        "properties": {
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "bufferMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Post-session buffer, in minutes."
+          },
+          "groupCapacity": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "description": "Required for group types. Omit or use null for individual types."
+          },
+          "sessionTypeId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "durationMinutes",
+          "bufferMinutes",
+          "groupCapacity",
+          "sessionTypeId"
+        ]
+      },
+      "SchedulingSettingsDto": {
+        "type": "object",
+        "properties": {
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "bufferMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Post-session buffer, in minutes."
+          },
+          "groupCapacity": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "description": "Required for group types. Omit or use null for individual types."
+          }
+        },
+        "required": [
+          "durationMinutes",
+          "bufferMinutes"
+        ]
+      },
+      "EligibleCoachDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "displayName"
+        ]
+      },
+      "ScheduledSessionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionTypeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionTypeName": {
+            "type": "string"
+          },
+          "coach": {
+            "$ref": "#/components/schemas/EligibleCoachDto"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "bufferMinutes": {
+            "type": "number"
+          },
+          "capacity": {
+            "type": "number"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "CANCELLED"
+            ]
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "sessionTypeId",
+          "sessionTypeName",
+          "coach",
+          "startsAt",
+          "endsAt",
+          "bufferMinutes",
+          "capacity",
+          "revision",
+          "status",
+          "cancelledAt"
+        ]
+      },
+      "SchedulePageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduledSessionDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "CreateScheduledSessionDto": {
+        "type": "object",
+        "properties": {
+          "coachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2027-01-05T09:30:00+03:00",
+            "description": "Start instant with an explicit UTC offset."
+          },
+          "sessionTypeId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "coachId",
+          "startsAt",
+          "sessionTypeId"
+        ]
+      },
+      "ScheduledSessionCreatedDto": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "sessionId"
+        ]
+      },
+      "EditScheduledSessionDto": {
+        "type": "object",
+        "properties": {
+          "coachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2027-01-05T09:30:00+03:00",
+            "description": "Start instant with an explicit UTC offset."
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "coachId",
+          "startsAt",
+          "expectedRevision"
+        ]
+      },
+      "CancelScheduledSessionDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
         ]
       }
     }

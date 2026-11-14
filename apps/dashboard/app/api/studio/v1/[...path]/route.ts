@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
 import { clientQuery, clientRoute, isClientRelayPath, readClientRoute } from '../../../../../lib/client-relay';
 import { purchaseRelay } from '../../../../../lib/purchase-funding-relay';
+import { schedulingQuery, schedulingResponse, schedulingRoute } from '../../../../../lib/scheduling';
 import { accessCookie, api, refreshCookie, reply, trustedOrigin, validCsrf } from '../../../../../lib/session';
 
 type Route = { params: Promise<{ path: string[] }> };
@@ -21,7 +22,8 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
   const catalog = catalogRoute(method, parts);
   const client = clientRoute(request.method, parts);
   if (isClientRelayPath(parts) && !client) return rejectedClientRequest(parts);
-  if (!legacy && !catalog && !client) return reply({ code: 'NOT_FOUND' }, 404);
+  const scheduling = parts[0] === 'scheduling' ? schedulingRoute(request.method, parts) : null;
+  if (!legacy && !catalog && !client && !scheduling) return reply({ code: 'NOT_FOUND' }, 404);
   const token = request.cookies.get(accessCookie)?.value;
   if (!token) return reply({ code: 'UNAUTHENTICATED' }, 401);
   try {
@@ -42,8 +44,8 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
       const result = await readClientRoute(client, parts.join('/'), token, query);
       return result.ok ? reply(result.data) : reply(result.error, result.status);
     }
-    if (!catalog) return reply({ code: 'NOT_FOUND' }, 404);
-    const query = catalogQuery(catalog, request.nextUrl.searchParams);
+    const query = scheduling ? schedulingQuery(scheduling, request.nextUrl.searchParams)
+      : catalog ? catalogQuery(catalog, request.nextUrl.searchParams) : null;
     if (!query) return reply({ code: 'INVALID_INPUT' }, 400);
     let options: Parameters<typeof api>[2] = { token, query };
     if (method !== 'GET') {
@@ -56,7 +58,8 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
     const result = await api(parts.join('/'), method, options);
     if (!result.ok) return reply(await catalogError(result), result.status);
     if (result.status === 204) return new NextResponse(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
-    return reply(catalogResponse(catalog, await result.json()), result.status);
+    const body = await result.json();
+    return reply(scheduling ? schedulingResponse(scheduling, body) : catalogResponse(catalog!, body), result.status);
   } catch {
     return reply({ code: 'DASHBOARD_UNAVAILABLE' }, 503);
   }

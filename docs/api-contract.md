@@ -100,6 +100,23 @@ Activation reuses the pending complimentary Membership or creates the single Mem
 
 Success returns `200` with the activated `membership`, `purchaseType`, `fundingStatus`, and `overrideUsed`, plus `overrideReason` when applied. A balance due without an override returns `409 ACTIVATION_OVERRIDE_REQUIRED`. A missing or blank reason for an explicit override returns `400 ACTIVATION_OVERRIDE_REASON_REQUIRED`. An already activated Membership returns `409 MEMBERSHIP_ALREADY_ACTIVATED`. An ineligible Purchase or Membership returns `409 MEMBERSHIP_NOT_ELIGIBLE`. Changed input with an existing key returns `409 IDEMPOTENCY_KEY_REUSED`. Funding integrity errors use the funding read's error codes.
 
+## Implemented Scheduling Foundation
+
+Paths below are relative to `/api/v1/scheduling`. Admin reads use `schedule.read` and writes use `schedule.manage`. Each write requires an `Idempotency-Key`. The Coach endpoint uses `schedule.read_own` and takes the coach ID from the authenticated session.
+
+| Method and path | Behavior |
+|---|---|
+| GET `/settings` | List defaults for active session types. |
+| PATCH `/settings/{sessionTypeId}` | Set positive integer `durationMinutes`, nonnegative integer `bufferMinutes`, and a positive integer `groupCapacity` for group types. Individual settings omit capacity or send null. Individual sessions have capacity one. Returns 204. |
+| GET `/coaches` | List active, verified Coaches with a Coach profile. |
+| GET `/sessions` | List sessions using an inclusive `from` and exclusive `until` start-time window, with optional `coachId`, `limit`, and `after` cursor. |
+| GET `/my-sessions` | List the Coach’s own assigned sessions using the same window and pagination. |
+| POST `/sessions` | Create with `sessionTypeId`, `coachId`, and `startsAt`. Returns 201 with `sessionId`. |
+| PATCH `/sessions/{sessionId}` | Move or reassign an upcoming, uncancelled session with `coachId`, `startsAt`, and `expectedRevision`. Returns 204. |
+| POST `/sessions/{sessionId}/cancel` | Cancel an upcoming session with `expectedRevision` and a nonblank `reason`. Returns 204. |
+
+Supply timestamps with an explicit UTC offset. The Admin dashboard uses Riyadh dates and times. Sessions retain their applied duration, capacity, and buffer through moves and reassignments. A stale edit or cancellation returns `409 SCHEDULED_SESSION_CHANGED`. A conflict returns `409 COACH_SCHEDULE_CONFLICT`. The active protected interval runs from start inclusive to end plus post-session buffer exclusive. Cancelled sessions remain visible in the list and release their protected interval. Scheduling mutations and their audits commit together.
+
 ## Implemented payment recording
 
 `POST /payments` requires a bearer credential, `Idempotency-Key`, and Admin or the current Staff grant `payment.record`. Send `clientId`, `intakeId`, `amount`, `currency`, `method`, and `receivedAt`. The Client must have an existing Client profile. Use a positive decimal string with up to two fractional digits, `SAR`, and one of `CASH`, `BANK_TRANSFER`, `MADA`, or `STC_PAY`. Send a past or current ISO timestamp with an explicit offset and up to millisecond precision. Optional `reference` and `evidence` fields hold a transaction reference and a supporting note or external evidence reference.

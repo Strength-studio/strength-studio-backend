@@ -84,6 +84,10 @@ enum AuditAction {
   PAYMENT_VERIFIED
   PAYMENT_ALLOCATED
   MEMBERSHIP_ACTIVATED
+  SCHEDULING_SETTINGS_CHANGED
+  SCHEDULED_SESSION_CREATED
+  SCHEDULED_SESSION_EDITED
+  SCHEDULED_SESSION_CANCELLED
 
   @@map("audit_action")
 }
@@ -100,6 +104,7 @@ enum AuditTarget {
   PAYMENT
   PAYMENT_ALLOCATION
   MEMBERSHIP
+  SCHEDULED_SESSION
 
   @@map("audit_target")
 }
@@ -145,6 +150,8 @@ model CoachProfile {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   displayName String   @map("display_name")
   user        User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  scheduledSessions ScheduledSession[]
 
   @@map("coach_profile")
 }
@@ -324,7 +331,42 @@ model SessionType {
   archivedAt  DateTime?                   @map("archived_at") @db.Timestamptz(6)
   eligibility PackageVersionSessionType[]
 
+  schedulingSettings SchedulingSettings?
+  scheduledSessions ScheduledSession[]
+
   @@map("session_type")
+}
+
+model SchedulingSettings {
+  sessionTypeId String @id @map("session_type_id") @db.Uuid
+  durationMinutes Int @map("duration_minutes")
+  bufferMinutes Int @map("buffer_minutes")
+  groupCapacity Int? @map("group_capacity")
+  sessionType SessionType @relation(fields: [sessionTypeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("scheduling_settings")
+}
+
+model ScheduledSession {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionTypeId String @map("session_type_id") @db.Uuid
+  coachId String @map("coach_id") @db.Uuid
+  startsAt DateTime @map("starts_at") @db.Timestamptz(6)
+  endsAt DateTime @map("ends_at") @db.Timestamptz(6)
+  bufferMinutes Int @map("buffer_minutes")
+  capacity Int
+  revision Int @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  cancellationReason String? @map("cancellation_reason") @db.VarChar(500)
+  sessionType SessionType @relation(fields: [sessionTypeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  coach CoachProfile @relation(fields: [coachId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([startsAt, id])
+  @@index([coachId, startsAt])
+  @@index([sessionTypeId])
+  @@map("scheduled_session")
 }
 
 model PackageVersionSessionType {

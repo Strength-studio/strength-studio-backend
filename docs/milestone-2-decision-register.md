@@ -73,9 +73,11 @@ Admin can suspend with a reason and start date. End-dated suspension reactivates
 
 ## O-08
 
-**Unresolved — scheduling.** Milestone 3. Waitlisting remains deferred pending scope and order.
+**Approved for Scheduling Foundation Slice 1 — coach buffers.** Configure one post-session buffer per SessionType. Store the applied buffer on each scheduled session. Settings changes apply to newly created sessions. Reject overlapping active assignments for the same coach using half-open intervals from start through end plus buffer. A session ending at 10:00 with a ten-minute buffer allows the next session at 10:10. Cancellation releases the interval. Overlap overrides are outside this slice.
 
-**Owner question.** What hold duration, client limits, coach buffers, replacement holds and affected-booking rules should launch, and is a ranked waitlist in scope? These determine capacity and how existing commitments are handled after lifecycle changes.
+**Unresolved — booking.** Waitlisting remains deferred pending scope and order.
+
+**Owner question.** What hold duration, client limits, replacement holds and affected-booking rules should launch, and is a ranked waitlist in scope? These determine capacity and how existing commitments are handled after lifecycle changes.
 
 ## O-09
 

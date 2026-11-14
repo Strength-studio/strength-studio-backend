@@ -3,7 +3,8 @@ import { Role, StaffPermission } from '@prisma/client';
 export type Action = 'account.self' | 'client.manage' | 'user.manage' | 'staff.grant.manage'
   | 'studio.configure' | 'membership.activate' | 'membership.activate_exception' | 'commission.read'
   | 'catalog.read' | 'catalog.manage' | 'audit.read' | 'purchase.accept_record' | 'purchase.funding.read'
-  | 'payment.record' | 'payment.verify' | 'payment.allocate';
+  | 'payment.record' | 'payment.verify' | 'payment.allocate'
+  | 'schedule.read' | 'schedule.manage' | 'schedule.read_own';
 
 export const staffPermissions = new Map(
   Object.values(StaffPermission)
@@ -16,7 +17,7 @@ const adminActions = new Set<Action>([
   'account.self', 'client.manage', 'user.manage', 'staff.grant.manage', 'studio.configure',
   'membership.activate', 'membership.activate_exception', 'commission.read',
   'catalog.read', 'catalog.manage', 'audit.read', 'purchase.accept_record', 'purchase.funding.read',
-  'payment.record', 'payment.verify', 'payment.allocate',
+  'payment.record', 'payment.verify', 'payment.allocate', 'schedule.read', 'schedule.manage',
 ]);
 
 const staffActions = new Set<Action>(['client.manage', 'catalog.read', 'catalog.manage', 'audit.read', 'payment.record']);
@@ -24,6 +25,7 @@ const staffActions = new Set<Action>(['client.manage', 'catalog.read', 'catalog.
 export function hasAction(role: Role, grants: StaffPermission[], action: Action): boolean {
   if (action === 'account.self') return Object.values(Role).includes(role);
   if (role === Role.ADMIN) return adminActions.has(action);
+  if (role === Role.COACH) return action === 'schedule.read_own';
   if (role === Role.CLIENT) return action === 'catalog.read';
   if (role !== Role.STAFF || !staffActions.has(action)) return false;
   const permission = staffPermissions.get(action);
