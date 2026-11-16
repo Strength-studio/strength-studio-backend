@@ -49,7 +49,10 @@ export class BookingController {
   }
 
   @Post('bookings') @BookingWrite('booking.assist')
-  @ApiOperation({ summary: 'Create a pending booking for an explicitly selected membership (Admin only)' })
+  @ApiOperation({
+    summary: 'Create a pending booking for an explicitly selected membership (Admin only)',
+    description: 'The session must start after the database time of the booking decision. Otherwise returns 409 SCHEDULE_START_IN_PAST.',
+  })
   @ApiCreatedResponse({ type: BookingCreatedDto })
   create(@Body() dto: CreateBookingDto, @Headers('idempotency-key') key: string | undefined, @Req() req: StudioRequest) {
     return this.bookings.create(context(req, key), dto);
@@ -57,7 +60,10 @@ export class BookingController {
 
   @Post('bookings/:id/approve') @BookingDecision('booking.approve')
   @ApiBody({ required: false, schema: { type: 'object', additionalProperties: false } })
-  @ApiOperation({ summary: 'Revalidate and confirm a pending booking (Admin only)' })
+  @ApiOperation({
+    summary: 'Revalidate and confirm a pending booking (Admin only)',
+    description: 'The current scheduled start must be after the database time of the approval decision. Otherwise returns 409 SCHEDULE_START_IN_PAST.',
+  })
   approve(@Param('id', ParseUUIDPipe) id: string, @Body() _body: EmptyBody,
     @Headers('idempotency-key') key: string | undefined, @Req() req: StudioRequest) {
     const hasBody = Number(req.headers['content-length']) > 0 || req.headers['transfer-encoding'];

@@ -15,6 +15,7 @@ const { loadConfig } = require('../dist/platform/config.js');
 const { hashPassword } = require('../dist/identity/password.js');
 const { digest, Sessions } = require('../dist/identity/session.service.js');
 const { dateOnly, riyadhDate } = require('../dist/platform/riyadh-calendar.js');
+const databaseClock = require('../dist/platform/database.js');
 
 const password = 'integration-only fixture passphrase';
 const allowedOrigin = 'http://localhost:3001';
@@ -2235,6 +2236,26 @@ async function createBooking(session, membership, client) {
   return (await expectStatus(201, bookingPath, adminWrite(bookingInput(session, membership, client)))).bookingId;
 }
 
+test('booking creation requires a scheduled start strictly after the database time', async t => {
+  const fixture = await bookingFixture();
+  const now = await databaseClock.databaseTime(migrator);
+  const membership = await fixture.membership('client', { activatedAt: new Date(+now - 86400_000) });
+  const past = await fixture.session({ startsAt: new Date(+now - 3 * 3600_000) });
+  const boundary = await fixture.session({ startsAt: now });
+  const future = await fixture.session({ startsAt: new Date(+now + 2 * 3600_000) });
+  t.mock.method(databaseClock, 'databaseTime', async () => now);
+
+  for (const session of [past, boundary]) {
+    const response = await expectStatus(409, bookingPath, adminWrite(bookingInput(session, membership)));
+    assert.equal(response.code, 'SCHEDULE_START_IN_PAST');
+    assert.equal(await migrator.booking.count({ where: { scheduledSessionId: session.id } }), 0);
+  }
+  const bookingId = await createBooking(future, membership);
+  const booking = await migrator.booking.findUniqueOrThrow({ where: { id: bookingId } });
+  assert.equal(booking.status, 'PENDING');
+  assert.deepEqual(booking.createdAt, now);
+});
+
 test('booking routes require Admin even with stored Staff grants and validate explicit Client and membership references', async () => {
   const fixture = await bookingFixture();
   const session = await fixture.session();
@@ -2324,6 +2345,10 @@ test('booking eligibility uses frozen session types and the full Riyadh validity
     if (reason) assert.equal((await expectStatus(409, bookingPath, adminWrite(bookingInput(session, membership)))).code,
       'MEMBERSHIP_NOT_ELIGIBLE');
   }
+  for (const ineligible of [inactive, expired]) {
+    assert.equal((await expectStatus(409, bookingPath, adminWrite(bookingInput(sameDay, ineligible)))).code,
+      'MEMBERSHIP_NOT_ELIGIBLE');
+  }
   const id = await createBooking(atMidnight, membership);
   await expectStatus(204, bookingDecision(id, 'approve'), adminWrite());
 });
@@ -2404,20 +2429,29 @@ test('booking approvals recheck expiry and count past confirmations until the se
     through: calendarAt(new Date(), 5) });
   const past = await fixture.session({ startsAt: new Date(Date.now() - 48 * 3600_000) });
   const future = await fixture.session();
-  const first = await createBooking(past, active);
   const next = await createBooking(future, active);
   const willExpire = await createBooking(future, expired, 'other');
+  const historical = await migrator.booking.create({ data: {
+    ...bookingInput(past, active), status: 'CONFIRMED',
+    createdAt: new Date(+past.startsAt - 2 * 3600_000), updatedAt: new Date(+past.startsAt - 3600_000),
+  } });
   await migrator.membership.update({ where: { id: expired.id }, data: { validThrough: dateColumn(calendarAt(new Date(), -1)) } });
-  await expectStatus(204, bookingDecision(first, 'approve'), adminWrite());
   for (const id of [next, willExpire]) {
     assert.equal((await expectStatus(409, bookingDecision(id, 'approve'), adminWrite())).code, 'MEMBERSHIP_NOT_ELIGIBLE');
     assert.equal((await migrator.booking.findUniqueOrThrow({ where: { id } })).status, 'PENDING');
   }
+  assert.deepEqual(await migrator.booking.findUniqueOrThrow({ where: { id: historical.id } }), historical);
+  const pastPage = await expectStatus(200, bookingPath + bookingQuery(past.id), adminRead());
+  assert.equal(pastPage.session.confirmedBookingCount, 1);
+  assert.deepEqual(pastPage.items.map(({ id, status }) => ({ id, status })), [{ id: historical.id, status: 'CONFIRMED' }]);
   const choices = () => expectStatus(200, bookingChoices(users.client.id, future.id), adminRead());
   assert.equal((await choices()).find(row => row.membershipId === active.id).remainingCommitments, 0);
   const future2 = await fixture.session({ startsAt: new Date(+future.startsAt + 7200_000) });
   assert.equal((await expectStatus(409, bookingPath, adminWrite(bookingInput(future2, active)))).code, 'MEMBERSHIP_NOT_ELIGIBLE');
-  await expectStatus(204, bookingDecision(first, 'cancel'), adminWrite({ reason: 'Release the commitment' }));
+  await expectStatus(204, bookingDecision(historical.id, 'cancel'), adminWrite({ reason: 'Release the commitment' }));
+  const cancelledHistory = await expectStatus(200, bookingPath + bookingQuery(past.id), adminRead());
+  assert.equal(cancelledHistory.session.confirmedBookingCount, 0);
+  assert.equal(cancelledHistory.items[0].status, 'CANCELLED');
   assert.equal((await choices()).find(row => row.membershipId === active.id).remainingCommitments, 1);
   await expectStatus(204, bookingDecision(next, 'approve'), adminWrite());
   await expectStatus(204, schedulePath + '/' + future.id + '/cancel', adminWrite({ expectedRevision: 1, reason: 'Coach unavailable' }));
@@ -2515,6 +2549,46 @@ async function waitForBookingLock(fragment, count) {
 }
 
 const secondAdmin = body => ({ ...adminWrite(body), access: sessions.raceAdmin.accessToken });
+
+test('booking approval checks the start after acquiring the session lock', async t => {
+  const fixture = await bookingFixture({ capacity: 1 });
+  let now = await databaseClock.databaseTime(migrator);
+  const membership = await fixture.membership('client', { allowance: 1, activatedAt: new Date(+now - 86400_000) });
+  const session = await fixture.session({ startsAt: new Date(+now + 10_000), endsAt: new Date(+now + 20_000) });
+  const future = await fixture.session({ startsAt: new Date(+now + 30_000) });
+  t.mock.method(databaseClock, 'databaseTime', async () => now);
+  const id = await createBooking(session, membership);
+  const pending = await migrator.booking.findUniqueOrThrow({ where: { id } });
+  const approve = adminWrite();
+  const path = bookingDecision(id, 'approve');
+  let approval;
+  try {
+    await migrator.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM scheduled_session WHERE id = ${session.id}::uuid FOR UPDATE`;
+      approval = expectStatus(409, path, approve);
+      await waitForBookingLock('FROM scheduled_session WHERE id', 1);
+      now = session.startsAt;
+    });
+  } finally { await approval; }
+  assert.equal((await approval).code, 'SCHEDULE_START_IN_PAST');
+  now = new Date(+session.endsAt + 1);
+  assert.equal((await expectStatus(409, path, approve)).code, 'SCHEDULE_START_IN_PAST');
+  assert.deepEqual(await migrator.booking.findUniqueOrThrow({ where: { id } }), pending);
+  assert.equal(await migrator.idempotencyKey.count({ where: { key: approve.key } }), 0);
+  assert.equal(await migrator.auditLog.count({ where: { targetType: 'BOOKING', targetId: id } }), 1);
+  const history = await expectStatus(200, bookingPath + bookingQuery(session.id), adminRead());
+  assert.equal(history.session.confirmedBookingCount, 0);
+  const choices = await expectStatus(200, bookingChoices(users.client.id, future.id), adminRead());
+  assert.equal(choices.find(choice => choice.membershipId === membership.id).remainingCommitments, 1);
+
+  const futureCreate = adminWrite(bookingInput(future, membership));
+  const created = await expectStatus(201, bookingPath, futureCreate);
+  const futureApproval = adminWrite();
+  await expectStatus(204, bookingDecision(created.bookingId, 'approve'), futureApproval);
+  now = new Date(+future.startsAt + 1);
+  assert.deepEqual(await expectStatus(201, bookingPath, futureCreate), created);
+  await expectStatus(204, bookingDecision(created.bookingId, 'approve'), futureApproval);
+});
 
 for (const shared of ['session', 'membership']) {
   test('concurrent booking approvals serialize on the final ' + shared + ' unit in PostgreSQL', async () => {
