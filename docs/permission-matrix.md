@@ -47,6 +47,8 @@ This is the canonical action and resource map for the [API contract](api-contrac
 | `report.read`, `report.export`, `audit.read` | Yes | Same named grants, independently | Own permitted operational report reads only | Own permitted report reads only |
 | `commission.read`, `commission.record`, `commission.distribute`, `commission.export`, `commission.audit` | **Admin only** | **Denied with all grants** | **Denied** | **Denied** |
 
+Booking Management Slice 1 enables `booking.read`, `booking.assist`, `booking.approve`, and `booking.cancel.decide` for Admin only. Approval and rejection share `booking.approve`. Staff booking grants remain dormant, including existing stored grants. The booking rows above describe the broader role design for future slices.
+
 Booking requests include cancellation and reschedule requests, not their approval. Waitlist join and withdrawal use the same own-request scope if enabled. Operational exports require both the relevant read and export permissions. Operational audit access never includes private commission audit.
 
 ## Foundation authorization differences

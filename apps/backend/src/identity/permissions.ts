@@ -4,12 +4,13 @@ export type Action = 'account.self' | 'client.manage' | 'user.manage' | 'staff.g
   | 'studio.configure' | 'membership.activate' | 'membership.activate_exception' | 'commission.read'
   | 'catalog.read' | 'catalog.manage' | 'audit.read' | 'purchase.accept_record' | 'purchase.funding.read'
   | 'payment.record' | 'payment.verify' | 'payment.allocate'
-  | 'schedule.read' | 'schedule.manage' | 'schedule.read_own';
+  | 'schedule.read' | 'schedule.manage' | 'schedule.read_own'
+  | 'booking.read' | 'booking.assist' | 'booking.approve' | 'booking.cancel.decide';
 
 export const staffPermissions = new Map(
   Object.values(StaffPermission)
     .filter(value => value !== StaffPermission.MEMBERSHIP_ACTIVATE && value !== StaffPermission.PAYMENT_VERIFY
-      && value !== StaffPermission.PAYMENT_ALLOCATE)
+      && value !== StaffPermission.PAYMENT_ALLOCATE && !value.startsWith('BOOKING_'))
     .map(value => [value.toLowerCase().replaceAll('_', '.'), value]),
 );
 
@@ -18,6 +19,7 @@ const adminActions = new Set<Action>([
   'membership.activate', 'membership.activate_exception', 'commission.read',
   'catalog.read', 'catalog.manage', 'audit.read', 'purchase.accept_record', 'purchase.funding.read',
   'payment.record', 'payment.verify', 'payment.allocate', 'schedule.read', 'schedule.manage',
+  'booking.read', 'booking.assist', 'booking.approve', 'booking.cancel.decide',
 ]);
 
 const staffActions = new Set<Action>(['client.manage', 'catalog.read', 'catalog.manage', 'audit.read', 'payment.record']);

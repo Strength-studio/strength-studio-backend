@@ -221,10 +221,13 @@ export function ScheduleWorkspace() {
             <td>{session.sessionTypeName}</td><td>{session.coach.displayName}</td>
             <td>{dateTime(session.startsAt)}<br />{dateTime(session.endsAt)}</td>
             <td>{session.bufferMinutes} min</td><td>{session.capacity}</td><td>{session.status === 'CANCELLED' ? 'Cancelled' : 'Scheduled'}</td>
-            <td>{editable && <div className="button-row">
-              <button className="button quiet" type="button" disabled={busy} onClick={() => setEditor({ kind: 'edit', session })}>Edit</button>
-              <button className="button quiet" type="button" disabled={busy} onClick={() => setEditor({ kind: 'cancel', session })}>Cancel</button>
-            </div>}</td>
+            <td><div className="button-row">
+              <a className="button quiet" href={'/bookings?scheduledSessionId=' + session.id}>Bookings</a>
+              {editable && <>
+                <button className="button quiet" type="button" disabled={busy} onClick={() => setEditor({ kind: 'edit', session })}>Edit</button>
+                <button className="button quiet" type="button" disabled={busy} onClick={() => setEditor({ kind: 'cancel', session })}>Cancel</button>
+              </>}
+            </div></td>
           </tr>;
         })}</tbody>
       </table></div> : page && <p className="muted">No sessions in this date range.</p>}

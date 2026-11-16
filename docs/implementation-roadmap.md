@@ -15,6 +15,8 @@ Proposed repository layout after foundation approval: `apps/backend`, `apps/dash
 
 Client Management Slice 1 implements the authorized directory, detail, and Client own-profile reads on the Foundation schema. The dashboard includes the directory and detail views. Client profile writes and onboarding are later work. O-02 still gates onboarding. [Implemented API contract](api-contract.md#implemented-client-reads)
 
+Booking Management Slice 1 adds an Admin workspace for booking against the selected Client membership and a scheduled session. PostgreSQL booking commands lock the membership before the scheduled session and recheck both limits. The booking table has restrictive references, column-scoped writes, and a partial unique index for pending and confirmed bookings. Booking history uses the existing append-only audit. [Implemented API contract](api-contract.md#implemented-booking-management-slice-1)
+
 ## Readiness after the audit corrections
 
 The [original audit](milestone-0-final-readiness-audit.md) is retained as the pre-correction record. Its Foundation findings are addressed in the current contracts:

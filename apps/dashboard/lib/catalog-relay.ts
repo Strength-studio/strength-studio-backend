@@ -49,10 +49,10 @@ export function catalogQuery(route: Route, input: URLSearchParams) {
 
 const limit = 16 * 1024;
 
-export async function catalogBody(request: Request): Promise<{ body: object } | { status: 400 | 413 }> {
-  if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json' || !request.body) {
-    return { status: 400 };
-  }
+export async function catalogBody(request: Request, allowEmpty = false): Promise<{ body: object } | { status: 400 | 413 }> {
+  const json = request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() === 'application/json';
+  if (!request.body) return allowEmpty ? { body: {} } : { status: 400 };
+  if (!json && !allowEmpty) return { status: 400 };
   const reader = request.body.getReader();
   try {
     const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -68,6 +68,8 @@ export async function catalogBody(request: Request): Promise<{ body: object } | 
       }
       raw += decoder.decode(value, { stream: true });
     }
+    if (allowEmpty && size === 0) return { body: {} };
+    if (!json) return { status: 400 };
     const body: unknown = JSON.parse(raw + decoder.decode());
     return body && typeof body === 'object' && !Array.isArray(body) ? { body } : { status: 400 };
   } catch {
@@ -151,6 +153,8 @@ const codes = new Set([
   'COACH_SCHEDULE_CONFLICT', 'COACH_NOT_ELIGIBLE', 'INVALID_GROUP_CAPACITY', 'SCHEDULING_SETTINGS_REQUIRED',
   'INVALID_SCHEDULE_WINDOW', 'INVALID_SCHEDULE_CURSOR', 'INVALID_SCHEDULE_END', 'SCHEDULE_START_IN_PAST',
   'SCHEDULED_SESSION_NOT_FOUND', 'SCHEDULED_SESSION_NOT_EDITABLE', 'SCHEDULED_SESSION_CHANGED',
+  'SLOT_FULL', 'BOOKING_ALREADY_EXISTS', 'MEMBERSHIP_NOT_ELIGIBLE', 'SESSION_CANCELLED', 'BOOKING_STATE_CONFLICT',
+  'INVALID_BOOKING_CURSOR', 'BOOKING_NOT_FOUND', 'CLIENT_NOT_FOUND',
   'IDEMPOTENCY_KEY_EXPIRED', 'RETRY_TRANSACTION', 'RATE_LIMITED', 'INTERNAL_ERROR',
 ]);
 

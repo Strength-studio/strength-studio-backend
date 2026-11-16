@@ -1036,6 +1036,236 @@ test('Scheduling in Chrome protects navigation and handles conflicts, cancellati
   });
 });
 
+const bookingsPath = '/bookings';
+const bookingApi = 'bookings';
+const bookingQuery = id => '?scheduledSessionId=' + id;
+const approvalPath = id => bookingApi + '/' + id + '/approve';
+
+async function dashboardBookingFixture() {
+  const admin = await signIn('admin');
+  const { sessionTypeId } = await dashboardScheduleFixture(admin);
+  const { id: coachId } = await fixture.user.create({ data: {
+    normalizedEmail: randomUUID() + '@coach.example', role: 'COACH', accountState: 'ACTIVE',
+    emailVerifiedAt: new Date(), coach: { create: { displayName: 'Booking Coach' } },
+  } });
+  const [{ id: adminId }, { id: clientId }, { id: otherClient }] = await Promise.all(['admin', 'client', 'clientSecond'].map(key =>
+    fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email(key) }, select: { id: true } })));
+  const bookingStart = new Date(nextSessionTime(480));
+  const scheduledSession = await fixture.scheduledSession.create({ data: {
+    sessionTypeId, coachId, startsAt: bookingStart, endsAt: new Date(+bookingStart + 3600_000), bufferMinutes: 0, capacity: 1,
+  } });
+  const dateInRiyadh = instant => new Date(new Intl.DateTimeFormat('en-CA', {
+    dateStyle: 'short', timeZone: 'Asia/Riyadh',
+  }).format(instant) + 'T00:00:00Z');
+  async function activate(clientId, kind, expired = false) {
+    const offer = await fixture.package.create({ data: { code: 'DASH-BOOK-' + randomUUID().slice(0, 8).toUpperCase() } });
+    const activatedAt = new Date(Date.now() - (expired ? 4 * 86400_000 : 0));
+    const initialSessionAllowance = kind === 'SESSION' ? 2 : null;
+    const version = await fixture.packageVersion.create({ data: {
+      packageId: offer.id, version: 1, name: (expired ? 'Expired ' : '') + kind + ' booking package', description: 'Private fixture terms',
+      kind, price: '0.00', validityDays: expired ? 1 : 6, sessionAllowance: initialSessionAllowance,
+      eligibility: { create: { sessionTypeId } },
+    } });
+    await fixture.packageVersion.update({ where: { id: version.id }, data: { publishedAt: activatedAt } });
+    const [{ terms }] = await fixture.$queryRaw`SELECT purchase_terms_for_version(${version.id}::uuid) AS terms`;
+    const { membership } = await fixture.purchase.create({ data: {
+      packageVersionId: version.id, clientId, acceptedById: adminId, acceptedAt: activatedAt, terms, type: 'COMPLIMENTARY',
+      acceptance: { create: { agreementMethod: 'VERBAL_AGREEMENT', agreementEvidence: 'Private fixture', purpose: 'Fixture' } },
+      membership: { create: { status: 'ACTIVE', activatedAt, validFrom: dateInRiyadh(activatedAt),
+        validThrough: dateInRiyadh(new Date(+activatedAt + (expired ? 0 : 5 * 86400_000))), initialSessionAllowance } },
+    }, select: { membership: true } });
+    return membership;
+  }
+  const membership = await activate(clientId, 'SESSION');
+  const time = await activate(clientId, 'TIME');
+  const expired = await activate(clientId, 'TIME', true);
+  const otherMembership = await activate(otherClient, 'SESSION');
+  return { admin, session: scheduledSession, clientId, otherClient, membership, time, expired, otherMembership };
+}
+
+test('Booking relay enforces Admin, CSRF, exact methods and paths, and financial field redaction', async () => {
+  const { admin, session, clientId, membership } = await dashboardBookingFixture();
+  const q = bookingQuery(session.id);
+  const choicesPath = 'clients/' + clientId + '/booking-memberships';
+  const body = { clientId, membershipId: membership.id, scheduledSessionId: session.id };
+  const create = { method: 'POST', payload: body };
+  const page = await fetch(origin + bookingsPath, { headers: { cookie: admin.cookie } });
+  assert.match(page.headers.get('cache-control'), /no-store/);
+  assert.match(await page.text(), /Select a scheduled session/);
+  const before = upstreamRequests;
+  assert.deepEqual(await relay(admin, 403, bookingApi, { ...create, source: 'https://invalid.example' }), { code: 'CSRF_DENIED' });
+  assert.deepEqual(await relay(admin, 403, bookingApi, { ...create, csrf: '' }), { code: 'CSRF_DENIED' });
+  assert.deepEqual(await relay(admin, 400, bookingApi, { ...create, key: '' }), { code: 'INVALID_IDEMPOTENCY_KEY' });
+  assert.deepEqual(await relay(admin, 404, 'bookings/not-a-uuid/approve', { method: 'POST' }), { code: 'NOT_FOUND' });
+  assert.deepEqual(await relay(admin, 404, 'bookings/' + session.id + '/reschedule', create), { code: 'NOT_FOUND' });
+  for (const method of ['HEAD', 'OPTIONS', 'PUT', 'POST', 'DELETE', 'PATCH']) {
+    await relay(admin, 405, choicesPath + q, { method });
+  }
+  for (const path of [bookingApi, bookingApi + q + '&scheduledSessionId=' + session.id, choicesPath + q + '&after=' + session.id]) {
+    assert.deepEqual(await relay(admin, 400, path), { code: 'INVALID_INPUT' });
+  }
+  assert.equal(upstreamRequests, before);
+  await relay({ cookie: '' }, 401, bookingApi + q);
+  for (const role of ['noGrant', 'clientManager', 'coach', 'client']) {
+    const actor = await signIn(role);
+    const denied = await fetch(origin + bookingsPath, { headers: { cookie: actor.cookie } });
+    assert.match(await denied.text(), /Your account does not have access to Booking management/);
+    await relay(actor, 403, bookingApi + q);
+    await relay(actor, 403, choicesPath + q);
+    await relay(actor, 403, bookingApi, create);
+    for (const action of ['approve', 'reject', 'cancel']) {
+      await relay(actor, 403, 'bookings/' + session.id + '/' + action,
+        { method: 'POST', ...(action === 'approve' ? {} : { payload: { reason: 'Fixture' } }) });
+    }
+  }
+  const choices = await relay(admin, 200, choicesPath + q);
+  assert(choices.some(choice => choice.membershipId === membership.id && choice.eligible));
+  assert(choices.some(choice => choice.reason === 'MEMBERSHIP_EXPIRED'));
+  assert.doesNotMatch(JSON.stringify(choices), /price|currency|payment|allocation|purchaseId|Private fixture/i);
+  const { bookingId } = await relay(admin, 201, bookingApi, create);
+  assert.equal((await relay(admin, 409, bookingApi, create)).code, 'BOOKING_ALREADY_EXISTS');
+  await relay(admin, 204, approvalPath(bookingId), { method: 'POST' });
+  const history = await relay(admin, 200, bookingApi + q);
+  assert.equal(history.session.confirmedBookingCount, 1);
+  assert.equal(history.items[0].status, 'CONFIRMED');
+  assert.equal(history.items[0].membershipId, membership.id);
+  assert.doesNotMatch(JSON.stringify(history), /price|currency|payment|allocation|purchaseId|Private fixture/i);
+  await relay(admin, 204, bookingApi + '/' + bookingId + '/cancel', { method: 'POST', payload: { reason: 'Keep fixture history' } });
+});
+
+async function bookingBrowserSelect(browser, selector, id) {
+  await browser.until(`document.querySelector(${JSON.stringify(selector)})?.querySelector("option[value='${id}']:enabled")`,
+    'selectable booking option');
+  await browser.evaluate(`(() => {
+    const select = document.querySelector(${JSON.stringify(selector)});
+    select.value = ${JSON.stringify(id)};
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+}
+
+const bookingButton = text => `[...document.querySelectorAll('button')].find(button => !button.disabled && button.textContent === ${JSON.stringify(text)})`;
+const bookingVisible = text => `document.querySelector('[aria-label="Session bookings"]')?.textContent.includes(${JSON.stringify(text)})`;
+
+test('Booking management in Chrome displays transitions and handles stale capacity, membership eligibility, and session expiry', browserTest, async () => {
+  const { admin, session, clientId, otherClient, membership, time, otherMembership } = await dashboardBookingFixture();
+  const { bookingId: otherBooking } = await relay(admin, 201, bookingApi, {
+    method: 'POST', payload: { clientId: otherClient, membershipId: otherMembership.id, scheduledSessionId: session.id },
+  });
+  await withChrome(origin, clientName('client'), async browser => {
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go(schedulingPage);
+    const link = `document.querySelector('a[href="/bookings?scheduledSessionId=${session.id}"]')`;
+    await browser.until(link, 'Bookings link from Scheduling');
+    await browser.evaluate(`${link}.click(); true`);
+    await browser.until(bookingVisible('0 of 1 seats occupied'), 'available seat');
+    await browser.evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Find Client"]');
+      form.elements.clientSearch.value = ${JSON.stringify(email('client'))};
+      form.requestSubmit();
+      return true;
+    })()`);
+    const clientSelect = '[aria-label="Session bookings"] > label select';
+    const membershipSelect = '[aria-label="Create booking"] select';
+    const createButton = 'Create pending booking';
+    await bookingBrowserSelect(browser, clientSelect, clientId);
+    await browser.until(bookingVisible('Membership has expired.'), 'expired membership reason');
+    assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(membershipSelect)}).value`), '');
+    assert.equal(await browser.evaluate(`Boolean(${bookingButton(createButton)})`), false);
+    await bookingBrowserSelect(browser, membershipSelect, membership.id);
+
+    async function click(text) {
+      const target = bookingButton(text);
+      await browser.until(target, text);
+      await browser.evaluate(`${target}.click(); true`);
+    }
+
+    await click(createButton);
+    await browser.until(bookingVisible('Booking created as pending.'), 'new pending booking');
+    const own = await fixture.booking.findFirstOrThrow({ where: { scheduledSessionId: session.id, clientId } });
+    assert.equal(own.membershipId, membership.id);
+    assert.equal(own.status, 'PENDING');
+
+    // Use a separate writer so the open dashboard still shows an available seat.
+    await relay(admin, 204, approvalPath(otherBooking), { method: 'POST' });
+    const ownApprove = `[...document.querySelectorAll('tr')].find(row =>
+      row.querySelector('a[href="/clients/${clientId}"]'))?.querySelector('button:first-of-type:enabled')`;
+    await browser.until(ownApprove, 'pending booking approval');
+    await browser.evaluate(`${ownApprove}.click(); true`);
+    await browser.until(bookingVisible('Capacity may have changed'), 'capacity conflict');
+    await browser.until(bookingVisible('1 of 1 seats occupied'), 'reloaded capacity');
+    await relay(admin, 204, bookingApi + '/' + otherBooking + '/cancel', { method: 'POST', payload: { reason: 'Seat released' } });
+    await click('Refresh bookings');
+    await browser.until(bookingVisible('0 of 1 seats occupied'), 'released capacity');
+
+    await fixture.membership.update({ where: { id: membership.id }, data: { validThrough: membership.validFrom } });
+    await click('Approve');
+    await browser.until(bookingVisible('no longer eligible for this session'), 'membership conflict');
+    assert.equal((await fixture.booking.findUniqueOrThrow({ where: { id: own.id } })).status, 'PENDING');
+    await fixture.membership.update({ where: { id: membership.id }, data: { validThrough: membership.validThrough } });
+    await click('Approve');
+    await browser.until(bookingVisible('Booking confirmed.'), 'confirmation displayed');
+
+    const move = (offset, expectedRevision) => relay(admin, 204, scheduleApi + '/' + session.id, {
+      method: 'PATCH', payload: { expectedRevision, coachId: session.coachId, startsAt: new Date(+session.startsAt + offset).toISOString() },
+    });
+    await move(10 * 86400_000, 1);
+    await click('Refresh bookings');
+    await browser.until(bookingVisible('Admin review required.'), 'review flag after move');
+    assert(await browser.evaluate(bookingVisible('1 of 1 seats occupied')));
+
+    const decision = "document.querySelector('form[aria-label=\"Booking decision\"]')";
+    async function reason(action, value) {
+      await click(action);
+      await browser.until(`${decision}?.elements.reason`, 'booking reason form');
+      await browser.evaluate(`(() => {
+        const form = ${decision};
+        form.elements.reason.value = ${JSON.stringify(value)};
+        form.requestSubmit();
+        return true;
+      })()`);
+    }
+    await reason('Cancel booking', 'Membership no longer covers the moved session');
+    await browser.until(bookingVisible('Booking cancelled.'), 'cancelled booking');
+    await move(0, 2);
+    await click('Refresh bookings');
+    await bookingBrowserSelect(browser, membershipSelect, time.id);
+    await click(createButton);
+    await browser.until(bookingVisible('Booking created as pending.'), 'pending replacement');
+    await reason('Reject', 'Client no longer wants to attend');
+    await browser.until(bookingVisible('Booking rejected.'), 'rejection displayed');
+    const terminal = await fixture.auditLog.findMany({
+      where: { targetType: 'BOOKING', reason: { in: ['Membership no longer covers the moved session', 'Client no longer wants to attend'] } },
+    });
+    assert.deepEqual(terminal.map(row => row.action).sort(), ['BOOKING_CANCELLED', 'BOOKING_REJECTED']);
+
+    await relay(admin, 204, scheduleApi + '/' + session.id + '/cancel', {
+      method: 'POST', payload: { expectedRevision: 3, reason: 'Fixture finished' },
+    });
+    await click('Refresh bookings');
+    await browser.until(bookingVisible('The scheduled session was cancelled.'), 'cancelled ScheduledSession');
+    await browser.setCookie(origin, '__Host-ss_access=invalid');
+    await click('Refresh bookings');
+    await browser.until('location.pathname === "/" && location.search === "?session=expired"', 'expired booking session');
+  });
+});
+
+test('Booking management in Chrome protects history after switching to a Staff account', browserTest, async t => {
+  const { admin, session, clientId, membership } = await dashboardBookingFixture();
+  await relay(admin, 201, bookingApi, { method: 'POST', payload: { clientId, membershipId: membership.id, scheduledSessionId: session.id } });
+  await withChrome(origin, clientName('client'), async browser => {
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go(bookingsPath + bookingQuery(session.id));
+    await browser.until(bookingVisible(clientName('client')), 'Admin booking data');
+    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
+    await browserSignOut(browser);
+    await browserSignIn(browser, 'noGrant');
+    await traverseHistory(t, browser, 'Back', bookingsPath,
+      alertIs('Your account does not have access to Booking management.'), { denied: true, fresh: true });
+    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Session bookings"]') === null`), true);
+  });
+});
+
 test('catalog relay returns a safe service unavailable response when the backend stops', async () => {
   const admin = await signIn('admin');
   await api.close();

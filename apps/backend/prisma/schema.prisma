@@ -88,6 +88,10 @@ enum AuditAction {
   SCHEDULED_SESSION_CREATED
   SCHEDULED_SESSION_EDITED
   SCHEDULED_SESSION_CANCELLED
+  BOOKING_CREATED
+  BOOKING_APPROVED
+  BOOKING_REJECTED
+  BOOKING_CANCELLED
 
   @@map("audit_action")
 }
@@ -105,6 +109,7 @@ enum AuditTarget {
   PAYMENT_ALLOCATION
   MEMBERSHIP
   SCHEDULED_SESSION
+  BOOKING
 
   @@map("audit_target")
 }
@@ -141,6 +146,7 @@ model ClientProfile {
   user        User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   purchases   Purchase[]
   payments    Payment[]
+  bookings    Booking[]
 
   @@map("client_profile")
 }
@@ -363,6 +369,8 @@ model ScheduledSession {
   sessionType SessionType @relation(fields: [sessionTypeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   coach CoachProfile @relation(fields: [coachId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
 
+  bookings Booking[]
+
   @@index([startsAt, id])
   @@index([coachId, startsAt])
   @@index([sessionTypeId])
@@ -447,7 +455,38 @@ model Membership {
   validThrough DateTime?      @map("valid_through") @db.Date
   initialSessionAllowance Int? @map("initial_session_allowance")
 
+  bookings Booking[]
+
   @@map("membership")
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  CANCELLED
+
+  @@map("booking_status")
+}
+
+model Booking {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId           String           @map("client_id") @db.Uuid
+  scheduledSessionId String           @map("scheduled_session_id") @db.Uuid
+  membershipId       String           @map("membership_id") @db.Uuid
+  status             BookingStatus    @default(PENDING)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+  client             ClientProfile    @relation(fields: [clientId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
+  scheduledSession   ScheduledSession @relation(fields: [scheduledSessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  membership         Membership       @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  // SQL enforces uniqueness for active bookings only.
+  @@index([clientId])
+  @@index([scheduledSessionId, createdAt, id])
+  @@index([scheduledSessionId, status])
+  @@index([membershipId, status])
+  @@map("booking")
 }
 
 enum PaymentMethod {

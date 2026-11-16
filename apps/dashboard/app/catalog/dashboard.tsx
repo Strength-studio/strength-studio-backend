@@ -273,7 +273,7 @@ export function CatalogDashboard({ account, busy, sessionNotice, onSignOut, onEx
   const loadTypes = useCallback(() => read && manage ? activeTypes() : Promise.resolve(null), [read, manage]);
   const types = useRead(loadTypes, onExpired);
   const visibleTabs: Tab[] = [...(manage ? ['manage' as const] : []), ...(read ? ['published' as const] : []),
-    ...(admin && read && manage ? ['types' as const] : [])];
+  ...(admin && read && manage ? ['types' as const] : [])];
   const currentTab = visibleTabs.includes(tab) ? tab : visibleTabs[0];
   function changed(message: string, packageId?: string) {
     setDialog(undefined);
@@ -320,13 +320,13 @@ export function CatalogDashboard({ account, busy, sessionNotice, onSignOut, onEx
               Check access again
             </button>
           </div>
-          : currentTab === 'manage' ? selected
-            ? <PackageView key={selected + ':' + generation} id={selected} admin={admin} onExpired={onExpired}
-              back={() => { setSelected(undefined); setNotice(''); }} onAction={show} />
-            : <PackageOverview key={generation} onExpired={onExpired} onOpen={id => { setSelected(id); setNotice(''); }}
-              onCreate={() => show({ kind: 'create' })} onRefresh={() => { refresh(); types.reload(); }} />
-          : currentTab === 'published' ? <PublishedCatalog onExpired={onExpired} />
-          : <SessionTypesView key={generation} onExpired={onExpired} onAction={show} />}
+            : currentTab === 'manage' ? selected
+              ? <PackageView key={selected + ':' + generation} id={selected} admin={admin} onExpired={onExpired}
+                back={() => { setSelected(undefined); setNotice(''); }} onAction={show} />
+              : <PackageOverview key={generation} onExpired={onExpired} onOpen={id => { setSelected(id); setNotice(''); }}
+                onCreate={() => show({ kind: 'create' })} onRefresh={() => { refresh(); types.reload(); }} />
+              : currentTab === 'published' ? <PublishedCatalog onExpired={onExpired} />
+                : <SessionTypesView key={generation} onExpired={onExpired} onAction={show} />}
       </div>
     </main>
     {dialog && <CatalogDialog action={dialog.action} types={dialog.types} onExpired={onExpired} onComplete={changed}

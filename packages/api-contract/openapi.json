@@ -2234,6 +2234,385 @@
           "Scheduling"
         ]
       }
+    },
+    "/api/v1/bookings": {
+      "get": {
+        "operationId": "BookingController_list",
+        "parameters": [
+          {
+            "name": "scheduledSessionId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session, limit, or cursor"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List booking history and current capacity for a scheduled session (Admin only)",
+        "tags": [
+          "Booking management"
+        ]
+      },
+      "post": {
+        "operationId": "BookingController_create",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBookingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingCreatedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid booking input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "Booking state, capacity, membership eligibility, session cancellation, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a pending booking for an explicitly selected membership (Admin only)",
+        "tags": [
+          "Booking management"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/booking-memberships": {
+      "get": {
+        "operationId": "BookingController_choices",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "scheduledSessionId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BookingMembershipDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Client or session ID"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List a Client’s membership choices and eligibility for the selected session (Admin only)",
+        "tags": [
+          "Booking management"
+        ]
+      }
+    },
+    "/api/v1/bookings/{id}/approve": {
+      "post": {
+        "operationId": "BookingController_approve",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid booking input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "Booking state, capacity, membership eligibility, session cancellation, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revalidate and confirm a pending booking (Admin only)",
+        "tags": [
+          "Booking management"
+        ]
+      }
+    },
+    "/api/v1/bookings/{id}/reject": {
+      "post": {
+        "operationId": "BookingController_reject",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookingReasonDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid booking input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "Booking state, capacity, membership eligibility, session cancellation, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reject a pending booking with a reason (Admin only)",
+        "tags": [
+          "Booking management"
+        ]
+      }
+    },
+    "/api/v1/bookings/{id}/cancel": {
+      "post": {
+        "operationId": "BookingController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookingReasonDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid booking input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "Booking state, capacity, membership eligibility, session cancellation, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel a pending or confirmed booking with a reason (Admin only)",
+        "tags": [
+          "Booking management"
+        ]
+      }
     }
   },
   "info": {
@@ -3411,6 +3790,266 @@
         },
         "required": [
           "expectedRevision",
+          "reason"
+        ]
+      },
+      "BookingSessionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionTypeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionTypeName": {
+            "type": "string"
+          },
+          "coach": {
+            "$ref": "#/components/schemas/EligibleCoachDto"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "CANCELLED"
+            ]
+          },
+          "capacity": {
+            "type": "integer"
+          },
+          "confirmedBookingCount": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "sessionTypeId",
+          "sessionTypeName",
+          "coach",
+          "startsAt",
+          "endsAt",
+          "status",
+          "capacity",
+          "confirmedBookingCount"
+        ]
+      },
+      "BookingItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clientId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clientDisplayName": {
+            "type": "string"
+          },
+          "scheduledSessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "membershipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "packageLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "CONFIRMED",
+              "REJECTED",
+              "CANCELLED"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requiresReview": {
+            "type": "boolean",
+            "description": "A confirmed booking whose current scheduled session falls outside its membership coverage."
+          }
+        },
+        "required": [
+          "id",
+          "clientId",
+          "clientDisplayName",
+          "scheduledSessionId",
+          "membershipId",
+          "packageLabel",
+          "status",
+          "createdAt",
+          "updatedAt",
+          "requiresReview"
+        ]
+      },
+      "BookingPageDto": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/BookingSessionDto"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BookingItemDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "session",
+          "items",
+          "nextCursor"
+        ]
+      },
+      "BookingMembershipDto": {
+        "type": "object",
+        "properties": {
+          "membershipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "packageLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "packageKind": {
+            "type": "string",
+            "enum": [
+              "TIME",
+              "SESSION"
+            ],
+            "nullable": true
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "validThrough": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "SESSION_CANCELLED",
+              "MEMBERSHIP_INACTIVE",
+              "MEMBERSHIP_EXPIRED",
+              "OUTSIDE_VALIDITY",
+              "SESSION_TYPE_NOT_ALLOWED",
+              "ALLOWANCE_EXHAUSTED"
+            ],
+            "nullable": true
+          },
+          "initialSessionAllowance": {
+            "type": "integer",
+            "nullable": true
+          },
+          "confirmedCommitments": {
+            "type": "integer",
+            "nullable": true
+          },
+          "remainingCommitments": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "membershipId",
+          "packageLabel",
+          "packageKind",
+          "validFrom",
+          "validThrough",
+          "eligible",
+          "reason",
+          "initialSessionAllowance",
+          "confirmedCommitments",
+          "remainingCommitments"
+        ]
+      },
+      "CreateBookingDto": {
+        "type": "object",
+        "properties": {
+          "scheduledSessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clientId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "membershipId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "scheduledSessionId",
+          "clientId",
+          "membershipId"
+        ]
+      },
+      "BookingCreatedDto": {
+        "type": "object",
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING"
+            ]
+          }
+        },
+        "required": [
+          "bookingId",
+          "status"
+        ]
+      },
+      "BookingReasonDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
           "reason"
         ]
       }

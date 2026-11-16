@@ -5,15 +5,14 @@ import { audit } from '../platform/audit';
 import { Commands } from '../platform/commands';
 import { Database, databaseTime } from '../platform/database';
 import { failure } from '../platform/http';
+import { dateOnly, riyadhDate } from '../platform/riyadh-calendar';
 import { ActivateMembershipDto, MembershipActivationDto, MembershipActivationStateDto } from './membership-activation.dto';
 import { PurchaseFundingService } from './purchase-funding.service';
 
 const action = 'membership.activate';
-const riyadhCalendar = new Intl.DateTimeFormat('en-CA', { dateStyle: 'short', timeZone: 'Asia/Riyadh' });
-const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
 
 export function membershipValidity(activatedAt: Date, validityDays: number) {
-  const validFrom = new Date(riyadhCalendar.format(activatedAt) + 'T00:00:00Z');
+  const validFrom = new Date(riyadhDate(activatedAt) + 'T00:00:00Z');
   const validThrough = new Date(validFrom);
   validThrough.setUTCDate(validThrough.getUTCDate() + validityDays - 1);
   if (!Number.isFinite(validThrough.valueOf()) || validThrough.getUTCFullYear() > 9999) {
@@ -37,7 +36,7 @@ function eligibility(purchase: { type: PurchaseType; acceptance: { id: string } 
   membership: { id: string; status: MembershipStatus; validThrough: Date | null } | null, now: Date):
   MembershipActivationStateDto['status'] {
   if (membership?.status === MembershipStatus.ACTIVE && membership.validThrough) {
-    const today = riyadhCalendar.format(now);
+    const today = riyadhDate(now);
     return today > dateOnly(membership.validThrough) ? 'EXPIRED' : 'ACTIVE';
   }
   if (!purchase.acceptance || !frozenTerms(purchase.terms)) return 'INELIGIBLE';

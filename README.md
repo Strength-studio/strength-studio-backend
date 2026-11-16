@@ -75,6 +75,13 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
   --test-name-pattern='Purchase funding viewer|Membership activation in Chrome' apps/dashboard/test/catalog.integration.test.cjs
 ```
 
+Run the Scheduling and Booking Management browser regressions in a fresh process.
+
+```sh
+STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket --env-file=.env --test \
+  --test-name-pattern='Scheduling in Chrome|Booking management in Chrome' apps/dashboard/test/catalog.integration.test.cjs
+```
+
 ## Implemented scope
 
 - Argon2id sign-in for active, verified accounts, short-lived bearer tokens, refresh rotation and replay revocation, logout, and single-use socket tickets. Current roles and staff grants are checked server-side. Existing sockets disconnect on invalidation or failed revalidation.
@@ -84,6 +91,8 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
 
 - Purchase acceptance, payment recording, verification and allocation, and the Admin Purchase Funding viewer with explicit membership activation. See [membership activation](docs/api-contract.md#implemented-membership-activation).
 
-Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. The legacy membership activation stubs and commission reads remain Admin-only and return `WORKFLOW_NOT_ENABLED`. Private offers, refunds, scheduling, attendance, Redis/BullMQ delivery, SMTP, and production deployment remain deferred.
+- Admin Scheduling and Booking Management at `/scheduling` and `/bookings`. Open a session's booking history from Scheduling or select a session in Booking Management, then search the Client directory and choose a membership. [Booking API contract](docs/api-contract.md#implemented-booking-management-slice-1).
+
+Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. The legacy membership activation stubs and commission reads remain Admin-only and return `WORKFLOW_NOT_ENABLED`. Private offers, refunds, attendance, Redis/BullMQ delivery, SMTP, and production deployment remain deferred.
 
 See [the implementation roadmap](docs/implementation-roadmap.md), [API contract](docs/api-contract.md), and [open studio decisions](docs/open-decisions.md).

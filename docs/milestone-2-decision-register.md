@@ -75,9 +75,11 @@ Admin can suspend with a reason and start date. End-dated suspension reactivates
 
 **Approved for Scheduling Foundation Slice 1 — coach buffers.** Configure one post-session buffer per SessionType. Store the applied buffer on each scheduled session. Settings changes apply to newly created sessions. Reject overlapping active assignments for the same coach using half-open intervals from start through end plus buffer. A session ending at 10:00 with a ten-minute buffer allows the next session at 10:10. Cancellation releases the interval. Overlap overrides are outside this slice.
 
-**Unresolved — booking.** Waitlisting remains deferred pending scope and order.
+**Approved for Booking Management Slice 1 — Admin-assisted booking.** A pending booking checks current availability without holding capacity. Only confirmations occupy seats and count against the selected session-based membership's initial allowance, even after the session takes place. Time-based memberships use validity and frozen SessionType eligibility. Actual entitlement deduction belongs to attendance verification.
 
-**Owner question.** What hold duration, client limits, replacement holds and affected-booking rules should launch, and is a ranked waitlist in scope? These determine capacity and how existing commitments are handled after lifecycle changes.
+Scheduled-session cancellation preserves booking records and releases occupancy and membership commitments. Session movement triggers revalidation when a pending booking is approved. Confirmed bookings retain their seats and display an Admin review flag if the revised session falls outside membership coverage. See the [implemented booking contract](api-contract.md#implemented-booking-management-slice-1).
+
+**Deferred decisions.** Timed holds, wider Client limits, replacement holds, waitlist ordering, and booking effects of future membership lifecycle changes remain outside this slice.
 
 ## O-09
 

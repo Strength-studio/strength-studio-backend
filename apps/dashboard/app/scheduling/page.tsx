@@ -35,6 +35,7 @@ export default async function SchedulingPage() {
         <a href="/"><Icon name="boxes" /> Catalog</a>
         <a href="/purchase-funding"><Icon name="file" /> Purchase funding</a>
         <a href="/scheduling" className="active" aria-current="page"><Icon name="file" /> Scheduling</a>
+        <a href="/bookings"><Icon name="users" /> Booking management</a>
       </nav>
       <div className="sidebar-foot"><span className="status-dot" /> Studio dashboard</div>
     </aside>

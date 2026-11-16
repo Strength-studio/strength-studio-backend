@@ -117,6 +117,27 @@ Paths below are relative to `/api/v1/scheduling`. Admin reads use `schedule.read
 
 Supply timestamps with an explicit UTC offset. The Admin dashboard uses Riyadh dates and times. Sessions retain their applied duration, capacity, and buffer through moves and reassignments. A stale edit or cancellation returns `409 SCHEDULED_SESSION_CHANGED`. A conflict returns `409 COACH_SCHEDULE_CONFLICT`. The active protected interval runs from start inclusive to end plus post-session buffer exclusive. Cancelled sessions remain visible in the list and release their protected interval. Scheduling mutations and their audits commit together.
 
+## Implemented Booking Management Slice 1
+
+Paths are relative to `/api/v1`. All six routes require an Admin bearer credential. The dashboard uses the same-origin relay with its existing CSRF and session checks.
+
+| Method and path | Permission | Request and success response |
+|---|---|---|
+| GET `/bookings` | `booking.read` | Required `scheduledSessionId` and optional `limit` (1–100, default 50) and `after` cursor. Returns 200 with `session`, newest-first `items`, and `nextCursor`. |
+| GET `/clients/{clientId}/booking-memberships` | `booking.read` | Required `scheduledSessionId`. Returns 200 with the Client's membership choices, each with a package label and kind, Riyadh validity dates, eligibility, and a reason if ineligible. Session packages include the initial allowance, confirmed commitments, and remaining commitments. |
+| POST `/bookings` | `booking.assist` | Send `clientId`, `scheduledSessionId`, and `membershipId`. Returns 201 with `{ bookingId, status: "PENDING" }`. |
+| POST `/bookings/{id}/approve` | `booking.approve` | Omit the body or use an empty JSON object. Confirms a pending booking and returns 204. |
+| POST `/bookings/{id}/reject` | `booking.approve` | Send a nonblank `reason` up to 500 characters. Rejects a pending booking and returns 204. |
+| POST `/bookings/{id}/cancel` | `booking.cancel.decide` | Send a nonblank `reason` up to 500 characters. Cancels a pending or confirmed booking and returns 204. |
+
+The session summary contains session and coach details, capacity, status, and `confirmedBookingCount`. Booking items contain the immutable Client, session, and membership IDs, Client display name, frozen package label, status, timestamps, and `requiresReview`. Financial and agreement data stay outside both booking reads. A history cursor belongs to its session. `nextCursor: null` marks the final page.
+
+A pending booking holds no seat or commitment. Creation and approval both check that the Client owns the selected active membership through its Purchase. They check the frozen session types, current expiry, and coverage of the entire scheduled interval. Membership validity includes both its first and final Riyadh calendar days. A session may end at midnight immediately after the final day. Session packages must have a remaining confirmation commitment, including when confirmations are for past sessions. Time packages use validity and type eligibility without a commitment limit. Approval leaves the membership and financial records untouched.
+
+Scheduled-session cancellation preserves existing booking statuses, blocks approval, and removes the cancelled session from occupancy and commitments. A moved session retains its confirmed bookings and their seats. `requiresReview` reflects whether the current scheduled interval or session type falls outside a confirmed booking's membership coverage. Pending bookings are evaluated against the current session when the Admin approves them.
+
+All writes require `Idempotency-Key`. Successful retries use the original response, and a changed request within the same actor and operation returns `409 IDEMPOTENCY_KEY_REUSED`. The API returns `{ code, requestId }` for errors. Booking conflicts include `SLOT_FULL`, `BOOKING_ALREADY_EXISTS`, `MEMBERSHIP_NOT_ELIGIBLE`, `SESSION_CANCELLED`, and `BOOKING_STATE_CONFLICT`. A failed approval leaves the booking pending. The booking status, retry outcome, and audit event commit together. The audit records the Admin, timestamp, previous and new statuses, and decision reason when required.
+
 ## Implemented payment recording
 
 `POST /payments` requires a bearer credential, `Idempotency-Key`, and Admin or the current Staff grant `payment.record`. Send `clientId`, `intakeId`, `amount`, `currency`, `method`, and `receivedAt`. The Client must have an existing Client profile. Use a positive decimal string with up to two fractional digits, `SAR`, and one of `CASH`, `BANK_TRANSFER`, `MADA`, or `STC_PAY`. Send a past or current ISO timestamp with an explicit offset and up to millisecond precision. Optional `reference` and `evidence` fields hold a transaction reference and a supporting note or external evidence reference.

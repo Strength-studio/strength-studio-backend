@@ -87,3 +87,19 @@ test('payment.allocate authorizes only Admin and cannot be assigned as a Staff g
     assert.equal(hasAction(role, Object.values(StaffPermission), 'payment.allocate'), false);
   }
 });
+
+test('booking actions remain Admin-only even with stored Staff grants', () => {
+  const actions = {
+    'booking.read': StaffPermission.BOOKING_READ,
+    'booking.assist': StaffPermission.BOOKING_ASSIST,
+    'booking.approve': StaffPermission.BOOKING_APPROVE,
+    'booking.cancel.decide': StaffPermission.BOOKING_CANCEL_DECIDE,
+  };
+  for (const action of Object.keys(actions)) {
+    assert.equal(hasAction(Role.ADMIN, [], action), true);
+    assert.equal(hasAction(Role.STAFF, Object.values(actions), action), false);
+    assert.equal(hasAction(Role.COACH, [], action), false);
+    assert.equal(hasAction(Role.CLIENT, [], action), false);
+    assert.equal(staffPermissions.has(action), false);
+  }
+});

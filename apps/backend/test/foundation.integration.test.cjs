@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { once } = require('node:events');
-const { cpSync, mkdirSync, mkdtempSync, rmSync } = require('node:fs');
+const { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync } = require('node:fs');
 const { createServer } = require('node:net');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
@@ -14,6 +14,7 @@ const { startApp } = require('../dist/app.js');
 const { loadConfig } = require('../dist/platform/config.js');
 const { hashPassword } = require('../dist/identity/password.js');
 const { digest, Sessions } = require('../dist/identity/session.service.js');
+const { dateOnly, riyadhDate } = require('../dist/platform/riyadh-calendar.js');
 
 const password = 'integration-only fixture passphrase';
 const allowedOrigin = 'http://localhost:3001';
@@ -2180,6 +2181,482 @@ test('concurrent Admin scheduling allows one conflicting write and audit failure
   const session = await migrator.scheduledSession.findFirstOrThrow({ where: { coachId: coach.id, startsAt } });
   await assert.rejects(runtime.scheduledSession.update({ where: { id: session.id }, data: { bufferMinutes: 0 } }));
   await assert.rejects(runtime.scheduledSession.delete({ where: { id: session.id } }));
+});
+
+const bookingMigration = '20261116000100_booking_management';
+const bookingPath = '/bookings';
+const bookingQuery = id => '?scheduledSessionId=' + id;
+const bookingDecision = (id, action) => bookingPath + '/' + id + '/' + action;
+const bookingChoices = (clientId, sessionId) => '/clients/' + clientId + '/booking-memberships' + bookingQuery(sessionId);
+const calendarAt = (date, days) => riyadhDate(new Date(date.valueOf() + days * 86400_000));
+const dateColumn = value => new Date(value + 'T00:00:00Z');
+
+async function bookingMembership(db, actorId, clientId, sessionTypeId, {
+  kind = 'SESSION', allowance = kind === 'SESSION' ? 2 : null, activatedAt = new Date(),
+  through = calendarAt(activatedAt, 5), active = true,
+} = {}) {
+  const offer = await db.package.create({ data: { code: 'BOOK-' + randomUUID().slice(0, 8).toUpperCase() } });
+  const version = await db.packageVersion.create({ data: {
+    packageId: offer.id, version: 1, name: kind + ' booking package', description: 'Fixture terms',
+    kind, price: '0.00', validityDays: 6, sessionAllowance: allowance,
+    eligibility: { create: { sessionTypeId } },
+  } });
+  await db.packageVersion.update({ where: { id: version.id }, data: { publishedAt: activatedAt } });
+  const [{ terms }] = await db.$queryRaw`SELECT purchase_terms_for_version(${version.id}::uuid) AS terms`;
+  const { membership } = await db.purchase.create({
+    data: {
+      clientId, packageVersionId: version.id, type: 'COMPLIMENTARY', acceptedById: actorId, acceptedAt: activatedAt, terms,
+      acceptance: { create: { agreementMethod: 'VERBAL_AGREEMENT', agreementEvidence: 'Fixture', purpose: 'Booking fixture' } },
+      membership: { create: active ? {
+        status: 'ACTIVE', activatedAt, validFrom: dateColumn(riyadhDate(activatedAt)), validThrough: dateColumn(through),
+        initialSessionAllowance: allowance,
+      } : {} },
+    },
+    select: { membership: true },
+  });
+  return membership;
+}
+
+async function bookingFixture({ capacity = 3 } = {}) {
+  const { sessionTypeId } = await schedulingFixture({ configure: false });
+  const { id: coachId } = await additionalCoach();
+  const membership = (client = 'client', options) =>
+    bookingMembership(migrator, users.admin.id, users[client].id, sessionTypeId, options);
+  const session = async ({ startsAt = new Date(scheduleDate()), endsAt = new Date(+startsAt + 3600_000), ...overrides } = {}) =>
+    migrator.scheduledSession.create({ data: { coachId, sessionTypeId, startsAt, endsAt, bufferMinutes: 0, capacity, ...overrides } });
+  return { sessionTypeId, coachId, membership, session };
+}
+
+function bookingInput(session, membership, client = 'client') {
+  return { clientId: users[client].id, scheduledSessionId: session.id, membershipId: membership.id };
+}
+
+async function createBooking(session, membership, client) {
+  return (await expectStatus(201, bookingPath, adminWrite(bookingInput(session, membership, client)))).bookingId;
+}
+
+test('booking routes require Admin even with stored Staff grants and validate explicit Client and membership references', async () => {
+  const fixture = await bookingFixture();
+  const session = await fixture.session();
+  const membership = await fixture.membership();
+  const other = await fixture.membership('other');
+  const data = bookingInput(session, membership);
+  const permissions = ['BOOKING_READ', 'BOOKING_ASSIST', 'BOOKING_APPROVE', 'BOOKING_CANCEL_DECIDE'];
+  for (const permission of permissions) {
+    const name = permission.toLowerCase().replaceAll('_', '.');
+    assert.equal((await expectStatus(400, '/staff-grants/' + users.staff.id + '/' + name, grantOptions(true))).code,
+      'INVALID_STAFF_PERMISSION');
+  }
+  await migrator.staffGrant.createMany({ data: permissions.map(permission => ({
+    staffUserId: users.staff.id, changedById: users.admin.id, permission,
+  })) });
+  try {
+    const id = randomUUID();
+    for (const role of [undefined, 'staff', 'coach', 'client']) {
+      const access = role && sessions[role].accessToken;
+      const status = role ? 403 : 401;
+      await expectStatus(status, bookingPath + bookingQuery(session.id), { access });
+      await expectStatus(status, bookingChoices(data.clientId, session.id), { access });
+      await expectStatus(status, bookingPath, { ...adminWrite(data), access });
+      for (const action of ['approve', 'reject', 'cancel']) {
+        await expectStatus(status, bookingDecision(id, action), { ...adminWrite({ reason: 'Fixture' }), access });
+      }
+    }
+  } finally {
+    await migrator.staffGrant.deleteMany({ where: {
+      staffUserId: users.staff.id, permission: { in: permissions },
+    } });
+  }
+  await expectStatus(400, bookingPath, { ...adminWrite(data), key: undefined });
+  await expectStatus(400, bookingPath, adminWrite({ ...data, membershipId: undefined }));
+  await expectStatus(400, bookingPath, adminWrite({ ...data, status: 'CONFIRMED' }));
+  for (const client of ['missingProfile', 'coach']) {
+    assert.equal((await expectStatus(404, bookingPath, adminWrite({ ...data, clientId: users[client].id }))).code, 'CLIENT_NOT_FOUND');
+  }
+  await expectStatus(404, bookingPath, adminWrite({ ...data, scheduledSessionId: randomUUID() }));
+  for (const membershipId of [other.id, randomUUID()]) {
+    assert.equal((await expectStatus(409, bookingPath, adminWrite({ ...data, membershipId }))).code, 'MEMBERSHIP_NOT_ELIGIBLE');
+  }
+  const time = await fixture.membership('client', { kind: 'TIME' });
+  const choices = await expectStatus(200, bookingChoices(data.clientId, session.id), adminRead());
+  assert(choices.find(choice => choice.membershipId === membership.id).eligible);
+  assert.deepEqual(choices.find(choice => choice.membershipId === time.id), {
+    membershipId: time.id, packageLabel: 'TIME booking package', packageKind: 'TIME',
+    validFrom: dateOnly(time.validFrom), validThrough: dateOnly(time.validThrough),
+    eligible: true, reason: null, initialSessionAllowance: null, confirmedCommitments: null, remainingCommitments: null,
+  });
+  assert(!choices.some(choice => choice.membershipId === other.id));
+  assert.doesNotMatch(JSON.stringify(choices), /price|currency|payment|allocation|terms|purchaseId/i);
+  const bookingId = await createBooking(session, time);
+  assert.equal((await migrator.booking.findUniqueOrThrow({ where: { id: bookingId } })).membershipId, time.id);
+  await expectStatus(204, bookingDecision(bookingId, 'approve'), adminWrite());
+  const anotherSession = await fixture.session({ startsAt: new Date(+session.startsAt + 2 * 3600_000) });
+  const anotherBooking = await createBooking(anotherSession, time);
+  await expectStatus(204, bookingDecision(anotherBooking, 'approve'), adminWrite());
+});
+
+test('booking eligibility uses frozen session types and the full Riyadh validity interval', async () => {
+  const fixture = await bookingFixture();
+  const day = calendarAt(new Date(), 1);
+  const start = new Date(day + 'T00:00:00+03:00');
+  const end = new Date(+start + 86400_000);
+  const membership = await fixture.membership('client', { activatedAt: start, through: day });
+  const inactive = await fixture.membership('client', { active: false });
+  const expired = await fixture.membership('client', { activatedAt: new Date(+start - 3 * 86400_000),
+    through: riyadhDate(new Date(+start - 2 * 86400_000)) });
+  const { sessionTypeId: otherType } = await schedulingFixture({ configure: false });
+  const sameDay = await fixture.session({ startsAt: start, endsAt: new Date(+start + 3600_000) });
+  const atMidnight = await fixture.session({ startsAt: new Date(+end - 3600_000), endsAt: end });
+  const { id: additionalCoachId } = await additionalCoach();
+  const overMidnight = await fixture.session({ coachId: additionalCoachId, startsAt: new Date(+end - 3600_000), endsAt: new Date(+end + 1) });
+  const before = await fixture.session({ coachId: additionalCoachId, startsAt: new Date(+start - 1), endsAt: new Date(+start + 3600_000) });
+  const wrongType = await fixture.session({ startsAt: new Date(+start + 2 * 3600_000), sessionTypeId: otherType });
+  const otherOffer = await migrator.purchase.findUniqueOrThrow({ where: { id: membership.purchaseId } });
+  await migrator.package.update({ where: { id: (await migrator.packageVersion.findUniqueOrThrow({
+    where: { id: otherOffer.packageVersionId },
+  })).packageId }, data: { archivedAt: new Date() } });
+  for (const [session, reason] of [[sameDay, null], [atMidnight, null], [overMidnight, 'OUTSIDE_VALIDITY'],
+    [before, 'OUTSIDE_VALIDITY'], [wrongType, 'SESSION_TYPE_NOT_ALLOWED']]) {
+    const choices = await expectStatus(200, bookingChoices(users.client.id, session.id), adminRead());
+    assert.equal(choices.find(item => item.membershipId === membership.id).reason, reason);
+    assert.equal(choices.find(item => item.membershipId === inactive.id).reason, 'MEMBERSHIP_INACTIVE');
+    assert.equal(choices.find(item => item.membershipId === expired.id).reason, 'MEMBERSHIP_EXPIRED');
+    if (reason) assert.equal((await expectStatus(409, bookingPath, adminWrite(bookingInput(session, membership)))).code,
+      'MEMBERSHIP_NOT_ELIGIBLE');
+  }
+  const id = await createBooking(atMidnight, membership);
+  await expectStatus(204, bookingDecision(id, 'approve'), adminWrite());
+});
+
+test('booking lifecycle, history pagination, normalized replay and audit preserve booking identity and reasons', async () => {
+  const fixture = await bookingFixture({ capacity: 1 });
+  const session = await fixture.session();
+  const membership = await fixture.membership();
+  const data = bookingInput(session, membership);
+  const body = adminWrite(data);
+  const monetaryState = () => Promise.all([
+    migrator.membership.findUniqueOrThrow({ where: { id: membership.id } }),
+    migrator.purchase.findUniqueOrThrow({ where: { id: membership.purchaseId } }),
+    migrator.payment.count(), migrator.paymentAllocation.count(),
+  ]);
+  const before = await monetaryState();
+  const first = await expectStatus(201, bookingPath, body);
+  const reject = bookingDecision(first.bookingId, 'reject');
+  const approve = bookingDecision(first.bookingId, 'approve');
+  const cancel = bookingDecision(first.bookingId, 'cancel');
+  assert.equal(first.status, 'PENDING');
+  assert.equal((await expectStatus(409, bookingPath, adminWrite(data))).code, 'BOOKING_ALREADY_EXISTS');
+  assert.equal((await expectStatus(409, bookingPath, { ...body, body: { ...data, membershipId: randomUUID() } })).code, 'IDEMPOTENCY_KEY_REUSED');
+  await expectStatus(400, approve, adminWrite({ unexpected: true }));
+  await expectStatus(400, reject, adminWrite({ reason: '  ' }));
+  await expectStatus(400, cancel, adminWrite({ reason: '  ' }));
+  const rejection = adminWrite({ reason: '  Client declined  ' });
+  await expectStatus(204, reject, rejection);
+  await expectStatus(204, reject, { ...rejection, body: { reason: 'Client declined' } });
+  assert.equal((await expectStatus(409, reject, { ...rejection, body: { reason: 'Different reason' } })).code, 'IDEMPOTENCY_KEY_REUSED');
+  for (const transition of [approve, cancel, reject]) {
+    assert.equal((await expectStatus(409, transition, adminWrite(transition === approve ? {} : { reason: 'Later' }))).code,
+      'BOOKING_STATE_CONFLICT');
+  }
+  const pending = await createBooking(session, membership);
+  await expectStatus(204, bookingDecision(pending, 'cancel'), adminWrite({ reason: 'Pending cancelled' }));
+  const id = await createBooking(session, membership);
+  const approval = adminWrite();
+  await expectStatus(204, bookingDecision(id, 'approve'), approval);
+  const path = bookingPath + bookingQuery(session.id);
+  const full = await expectStatus(200, path + '&limit=1', adminRead());
+  assert.equal(full.session.confirmedBookingCount, 1);
+  assert.equal(full.nextCursor, full.items[0].id);
+  assert.equal(full.items[0].id, id);
+  const rest = await expectStatus(200, path + '&after=' + full.nextCursor, adminRead());
+  assert.deepEqual(rest.items.map(item => item.status), ['CANCELLED', 'REJECTED']);
+  assert.equal(rest.nextCursor, null);
+  const foreign = await fixture.session({ startsAt: new Date(+session.startsAt + 2 * 3600_000) });
+  await expectStatus(400, bookingPath + bookingQuery(foreign.id) + '&after=' + id, adminRead());
+  const other = await fixture.membership('other');
+  assert.equal((await expectStatus(409, bookingPath, adminWrite(bookingInput(session, other, 'other')))).code, 'SLOT_FULL');
+  assert.equal((await expectStatus(409, bookingDecision(id, 'reject'), adminWrite({ reason: 'Too late' }))).code, 'BOOKING_STATE_CONFLICT');
+  await expectStatus(204, bookingDecision(id, 'cancel'), adminWrite({ reason: 'Changed plans' }));
+  await expectStatus(204, bookingDecision(id, 'approve'), approval);
+  assert.deepEqual(await expectStatus(201, bookingPath, body), first);
+  assert.equal((await expectStatus(200, path, adminRead())).session.confirmedBookingCount, 0);
+  assert.deepEqual(await monetaryState(), before);
+  const events = await migrator.auditLog.findMany({
+    where: { targetType: 'BOOKING', targetId: { in: [first.bookingId, pending, id] } }, orderBy: { createdAt: 'asc' },
+  });
+  assert.deepEqual(events.map(event => [event.action, event.redactedDetails.previousStatus, event.redactedDetails.status, event.reason]), [
+    ['BOOKING_CREATED', null, 'PENDING', null], ['BOOKING_REJECTED', 'PENDING', 'REJECTED', 'Client declined'],
+    ['BOOKING_CREATED', null, 'PENDING', null], ['BOOKING_CANCELLED', 'PENDING', 'CANCELLED', 'Pending cancelled'],
+    ['BOOKING_CREATED', null, 'PENDING', null], ['BOOKING_APPROVED', 'PENDING', 'CONFIRMED', null],
+    ['BOOKING_CANCELLED', 'CONFIRMED', 'CANCELLED', 'Changed plans'],
+  ]);
+  for (const event of events) {
+    assert.equal(event.actorId, users.admin.id);
+    assert(event.requestId && event.createdAt instanceof Date);
+  }
+});
+
+test('booking approvals recheck expiry and count past confirmations until the session or booking is cancelled', async () => {
+  const fixture = await bookingFixture();
+  const active = await fixture.membership('client', { allowance: 1, activatedAt: new Date(Date.now() - 5 * 86400_000),
+    through: calendarAt(new Date(), 5) });
+  const expired = await fixture.membership('other', { activatedAt: new Date(Date.now() - 5 * 86400_000),
+    through: calendarAt(new Date(), 5) });
+  const past = await fixture.session({ startsAt: new Date(Date.now() - 48 * 3600_000) });
+  const future = await fixture.session();
+  const first = await createBooking(past, active);
+  const next = await createBooking(future, active);
+  const willExpire = await createBooking(future, expired, 'other');
+  await migrator.membership.update({ where: { id: expired.id }, data: { validThrough: dateColumn(calendarAt(new Date(), -1)) } });
+  await expectStatus(204, bookingDecision(first, 'approve'), adminWrite());
+  for (const id of [next, willExpire]) {
+    assert.equal((await expectStatus(409, bookingDecision(id, 'approve'), adminWrite())).code, 'MEMBERSHIP_NOT_ELIGIBLE');
+    assert.equal((await migrator.booking.findUniqueOrThrow({ where: { id } })).status, 'PENDING');
+  }
+  const choices = () => expectStatus(200, bookingChoices(users.client.id, future.id), adminRead());
+  assert.equal((await choices()).find(row => row.membershipId === active.id).remainingCommitments, 0);
+  const future2 = await fixture.session({ startsAt: new Date(+future.startsAt + 7200_000) });
+  assert.equal((await expectStatus(409, bookingPath, adminWrite(bookingInput(future2, active)))).code, 'MEMBERSHIP_NOT_ELIGIBLE');
+  await expectStatus(204, bookingDecision(first, 'cancel'), adminWrite({ reason: 'Release the commitment' }));
+  assert.equal((await choices()).find(row => row.membershipId === active.id).remainingCommitments, 1);
+  await expectStatus(204, bookingDecision(next, 'approve'), adminWrite());
+  await expectStatus(204, schedulePath + '/' + future.id + '/cancel', adminWrite({ expectedRevision: 1, reason: 'Coach unavailable' }));
+  const page = await expectStatus(200, bookingPath + bookingQuery(future.id), adminRead());
+  assert.equal(page.session.status, 'CANCELLED');
+  assert.equal(page.session.confirmedBookingCount, 0);
+  assert.deepEqual(new Set(page.items.map(row => row.status)), new Set(['CONFIRMED', 'PENDING']));
+  assert.equal((await expectStatus(409, bookingDecision(willExpire, 'approve'), adminWrite())).code, 'SESSION_CANCELLED');
+  const released = await expectStatus(200, bookingChoices(users.client.id, future2.id), adminRead());
+  assert.equal(released.find(row => row.membershipId === active.id).remainingCommitments, 1);
+  const replacement = await createBooking(future2, active);
+  await expectStatus(204, bookingDecision(replacement, 'approve'), adminWrite());
+});
+
+test('booking writes and their idempotency claims roll back when audit insertion fails', async () => {
+  const fixture = await bookingFixture();
+  const session = await fixture.session();
+  const membership = await fixture.membership();
+  const create = adminWrite(bookingInput(session, membership));
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_booking_audit
+    CHECK (target_type <> 'BOOKING') NOT VALID`;
+  try {
+    await expectStatus(500, bookingPath, create);
+    assert.equal(await migrator.booking.count({ where: { scheduledSessionId: session.id } }), 0);
+    assert.equal(await migrator.idempotencyKey.count({ where: { key: create.key } }), 0);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_booking_audit`;
+  }
+  const { bookingId } = await expectStatus(201, bookingPath, create);
+  const approve = adminWrite();
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_booking_audit
+    CHECK (action <> 'BOOKING_APPROVED') NOT VALID`;
+  try {
+    await expectStatus(500, bookingDecision(bookingId, 'approve'), approve);
+    assert.equal((await migrator.booking.findUniqueOrThrow({ where: { id: bookingId } })).status, 'PENDING');
+    assert.equal(await migrator.idempotencyKey.count({ where: { key: approve.key } }), 0);
+  } finally {
+    await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_booking_audit`;
+  }
+  await expectStatus(204, bookingDecision(bookingId, 'approve'), approve);
+});
+
+test('PostgreSQL enforces active booking uniqueness, restrictive references and runtime privileges', async () => {
+  const fixture = await bookingFixture();
+  const session = await fixture.session();
+  const membership = await fixture.membership();
+  const id = await createBooking(session, membership);
+  const insert = (db, clientId, sessionId, membershipId) => db.$queryRaw`
+    INSERT INTO booking (client_id, scheduled_session_id, membership_id)
+    VALUES (${clientId}::uuid, ${sessionId}::uuid, ${membershipId}::uuid) RETURNING id`;
+  const indexes = await migrator.$queryRaw`SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'booking'`;
+  assert.deepEqual(indexes.map(index => index.indexname).sort(), [
+    'booking_active_client_session_key', 'booking_client_id_idx', 'booking_membership_id_status_idx', 'booking_pkey',
+    'booking_scheduled_session_id_created_at_id_idx', 'booking_scheduled_session_id_status_idx',
+  ]);
+  assert.match(indexes.find(index => index.indexname === 'booking_active_client_session_key').indexdef,
+    /UNIQUE.*\(client_id, scheduled_session_id\).*WHERE.*PENDING.*CONFIRMED/);
+  await assert.rejects(insert(runtime, users.client.id, session.id, membership.id), error => error.meta?.code === '23505');
+  for (const values of [[randomUUID(), session.id, membership.id], [users.other.id, randomUUID(), membership.id],
+    [users.other.id, session.id, randomUUID()]]) {
+    await assert.rejects(insert(runtime, ...values), error => error.meta?.code === '23503');
+  }
+  await assert.rejects(migrator.$executeRaw`DELETE FROM scheduled_session WHERE id = ${session.id}::uuid`,
+    error => error.meta?.code === '23503');
+  await assert.rejects(runtime.$executeRaw`DELETE FROM booking WHERE id = ${id}::uuid`, error => error.meta?.code === '42501');
+  for (const column of ['id', 'client_id', 'scheduled_session_id', 'membership_id', 'created_at']) {
+    await assert.rejects(runtime.$executeRawUnsafe(`UPDATE booking SET ${column} = ${column}`),
+      error => error.meta?.code === '42501');
+  }
+  await assert.rejects(runtime.$executeRaw`INSERT INTO booking (status) VALUES ('CONFIRMED')`, error => error.meta?.code === '42501');
+  await expectStatus(204, bookingDecision(id, 'reject'), adminWrite({ reason: 'Try again' }));
+  let duplicate;
+  try {
+    await runtime.$transaction(async tx => {
+      assert.equal((await insert(tx, users.client.id, session.id, membership.id)).length, 1);
+      duplicate = insert(runtime, users.client.id, session.id, membership.id).then(() => null, error => error);
+      await waitForBookingLock('INSERT INTO booking', 1);
+    });
+  } finally { await duplicate; }
+  assert.equal((await duplicate)?.meta?.code, '23505');
+  assert.equal(await migrator.booking.count({ where: { scheduledSessionId: session.id } }), 2);
+});
+
+async function waitForBookingLock(fragment, count) {
+  const deadline = Date.now() + 1200;
+  while (Date.now() < deadline) {
+    const [{ waiting }] = await owner.$queryRaw`
+      SELECT count(*)::int AS waiting FROM pg_stat_activity
+      WHERE datname = ${databaseName} AND usename = 'studio_api' AND wait_event_type = 'Lock'
+        AND query LIKE ${'%' + fragment + '%'}`;
+    if (waiting === count) return;
+    await delay(10);
+  }
+  assert.fail(count + ' booking transactions should wait on ' + fragment);
+}
+
+const secondAdmin = body => ({ ...adminWrite(body), access: sessions.raceAdmin.accessToken });
+
+for (const shared of ['session', 'membership']) {
+  test('concurrent booking approvals serialize on the final ' + shared + ' unit in PostgreSQL', async () => {
+    const fixture = await bookingFixture({ capacity: shared === 'session' ? 1 : 2 });
+    const firstSession = await fixture.session();
+    const firstMembership = await fixture.membership('client', { allowance: 1 });
+    const session = shared === 'session' ? firstSession : await fixture.session({ startsAt: new Date(+firstSession.startsAt + 7200_000) });
+    const membership = shared === 'membership' ? firstMembership : await fixture.membership('other', { allowance: 1 });
+    const first = await createBooking(firstSession, firstMembership);
+    const second = await createBooking(session, membership, shared === 'session' ? 'other' : 'client');
+    let approvals;
+    try {
+      await migrator.$transaction(async tx => {
+        if (shared === 'session') {
+          await tx.$queryRaw`SELECT id FROM scheduled_session WHERE id = ${session.id}::uuid FOR UPDATE`;
+        } else {
+          await tx.$queryRaw`SELECT id FROM membership WHERE id = ${membership.id}::uuid FOR UPDATE`;
+        }
+        approvals = Promise.all([
+          request(bookingDecision(first, 'approve'), adminWrite()),
+          request(bookingDecision(second, 'approve'), secondAdmin()),
+        ]);
+        await waitForBookingLock(shared === 'session' ? 'FROM scheduled_session WHERE id' : 'FROM membership WHERE id', 2);
+      });
+    } finally { await approvals; }
+    const responses = await approvals;
+    assert.deepEqual(responses.map(response => response.status).sort(), [204, 409]);
+    assert.equal((await responses.find(response => response.status === 409).json()).code,
+      shared === 'session' ? 'SLOT_FULL' : 'MEMBERSHIP_NOT_ELIGIBLE');
+    const rows = await migrator.booking.findMany({ where: { id: { in: [first, second] } } });
+    assert.deepEqual(rows.map(row => row.status).sort(), ['CONFIRMED', 'PENDING']);
+  });
+}
+
+for (const change of ['cancel', 'move']) {
+  for (const approveFirst of [false, true]) {
+    test('booking approval races session ' + change + ' in PostgreSQL with ' + (approveFirst ? 'approval' : 'scheduling') + ' first', async () => {
+      const fixture = await bookingFixture({ capacity: 1 });
+      const session = await fixture.session();
+      const membership = await fixture.membership();
+      const id = await createBooking(session, membership);
+      const approve = () => request(bookingDecision(id, 'approve'), secondAdmin());
+      const schedule = () => change === 'cancel'
+        ? request(schedulePath + '/' + session.id + '/cancel', adminWrite({ expectedRevision: 1, reason: 'Coach away' }))
+        : request(schedulePath + '/' + session.id, scheduleWrite({
+          expectedRevision: 1, startsAt: new Date(+session.startsAt + 10 * 86400_000).toISOString(), coachId: session.coachId,
+        }, 'PATCH'));
+      const pending = [];
+      try {
+        await migrator.$transaction(async tx => {
+          await tx.$queryRaw`SELECT id FROM scheduled_session WHERE id = ${session.id}::uuid FOR UPDATE`;
+          pending.push((approveFirst ? approve : schedule)());
+          await waitForBookingLock('FROM scheduled_session WHERE id', 1);
+          pending.push((approveFirst ? schedule : approve)());
+          await waitForBookingLock('FROM scheduled_session WHERE id', 2);
+        });
+      } finally { await Promise.all(pending); }
+      const [first, second] = await Promise.all(pending);
+      const approval = approveFirst ? first : second;
+      assert.equal((approveFirst ? second : first).status, 204);
+      assert.equal(approval.status, approveFirst ? 204 : 409);
+      if (!approveFirst) assert.equal((await approval.json()).code, change === 'move' ? 'MEMBERSHIP_NOT_ELIGIBLE' : 'SESSION_CANCELLED');
+      const page = await expectStatus(200, bookingPath + bookingQuery(session.id), adminRead());
+      assert.equal(page.items[0].status, approveFirst ? 'CONFIRMED' : 'PENDING');
+      assert.equal(page.items[0].requiresReview, approveFirst && change === 'move');
+      assert.equal(page.session.confirmedBookingCount, approveFirst && change === 'move' ? 1 : 0);
+      if (approveFirst && change === 'move') {
+        assert.equal((await expectStatus(200, bookingChoices(users.client.id, session.id), adminRead()))
+          .find(row => row.membershipId === membership.id).confirmedCommitments, 1);
+        await expectStatus(204, bookingDecision(id, 'cancel'), adminWrite({ reason: 'Membership no longer covers session' }));
+        assert.equal((await expectStatus(200, bookingPath + bookingQuery(session.id), adminRead())).items[0].requiresReview, false);
+      }
+    });
+  }
+}
+
+test('booking migration upgrades the accepted scheduling baseline and preserves historical records', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'studio-booking-upgrade-'));
+  const upgradeName = 'studio_booking_upgrade_' + randomBytes(6).toString('hex');
+  const { api, migration } = disposableUrls();
+  api.pathname = migration.pathname = '/' + upgradeName;
+  const schema = join(scratch, 'schema.prisma');
+  const migrations = join(prismaDirectory, 'migrations');
+  const copy = name => cpSync(join(migrations, name), join(scratch, 'migrations', name), { recursive: true });
+  let db, upgradedApp, databaseCreated = false;
+  try {
+    cpSync(join(prismaDirectory, 'schema.prisma'), schema);
+    mkdirSync(join(scratch, 'migrations'));
+    for (const name of readdirSync(migrations)) {
+      if (name <= '20261114000200_scheduling_foundation' || name === 'migration_lock.toml') copy(name);
+    }
+    await owner.$executeRawUnsafe(`CREATE DATABASE "${upgradeName}"`);
+    databaseCreated = true;
+    deployMigrations(api, migration, schema);
+    db = new PrismaClient({ datasourceUrl: migration.href });
+    const [baseline] = await db.$queryRaw`SELECT to_regclass('public.booking')::text AS booking,
+      (SELECT count(*)::int FROM _prisma_migrations WHERE finished_at IS NOT NULL) AS migrations`;
+    assert.deepEqual(baseline, { booking: null, migrations: 12 });
+    const admin = await db.user.create({ data: {
+      normalizedEmail: 'upgrade-booking-admin@studio.example', role: 'ADMIN', accountState: 'ACTIVE',
+      emailVerifiedAt: new Date(), passwordHash: await hashPassword(password),
+    } });
+    const client = await db.clientProfile.create({ data: {
+      displayName: 'Upgrade Client', user: { create: { normalizedEmail: 'upgrade-booking-client@studio.example',
+        role: 'CLIENT', accountState: 'ACTIVE' } },
+    } });
+    const coach = await db.coachProfile.create({ data: {
+      displayName: 'Upgrade Coach', user: { create: { normalizedEmail: 'upgrade-booking-coach@studio.example',
+        role: 'COACH', accountState: 'ACTIVE' } },
+    } });
+    const type = await db.sessionType.create({ data: { code: 'UPGRADE-BOOKING', name: 'Historical session type', mode: 'GROUP' } });
+    const membership = await bookingMembership(db, admin.id, client.userId, type.id);
+    const startsAt = new Date(scheduleDate());
+    const session = await db.scheduledSession.create({ data: {
+      sessionTypeId: type.id, coachId: coach.userId, startsAt, endsAt: new Date(+startsAt + 3600_000), bufferMinutes: 0, capacity: 2,
+    } });
+    const audit = await db.auditLog.create({ data: { actorId: admin.id, requestId: randomUUID(), action: 'SCHEDULED_SESSION_CREATED',
+      targetType: 'SCHEDULED_SESSION', targetId: session.id, redactedDetails: {} } });
+    const readPurchase = () => db.purchase.findUniqueOrThrow({ where: { id: membership.purchaseId }, include: { acceptance: true } });
+    const purchase = await readPurchase();
+    copy(bookingMigration);
+    deployMigrations(api, migration, schema);
+    assert.deepEqual(await db.scheduledSession.findUniqueOrThrow({ where: { id: session.id } }), session);
+    assert.deepEqual(await db.membership.findUniqueOrThrow({ where: { id: membership.id } }), membership);
+    assert.deepEqual(await db.auditLog.findUniqueOrThrow({ where: { id: audit.id } }), audit);
+    assert.deepEqual(await readPurchase(), purchase);
+    assert.equal(await db.booking.count(), 0);
+    upgradedApp = await startApp({ ...loadConfig({ ...process.env, DATABASE_URL: api.href }), host: '127.0.0.1', port: 0 });
+    const { accessToken } = await upgradedApp.get(Sessions).login(admin.normalizedEmail, password);
+    const response = await fetch(await upgradedApp.getUrl() + '/api/v1/bookings', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json', 'Idempotency-Key': randomUUID() },
+      body: JSON.stringify({ clientId: client.userId, membershipId: membership.id, scheduledSessionId: session.id }),
+    });
+    const result = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(result));
+    assert.equal((await db.booking.findUniqueOrThrow({ where: { id: result.bookingId } })).status, 'PENDING');
+  } finally {
+    await upgradedApp?.close();
+    await db?.$disconnect();
+    if (databaseCreated) await owner.$executeRawUnsafe(`DROP DATABASE "${upgradeName}" WITH (FORCE)`);
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
