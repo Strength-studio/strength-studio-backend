@@ -1147,7 +1147,7 @@ async function bookingBrowserSelect(browser, selector, id) {
 const bookingButton = text => `[...document.querySelectorAll('button')].find(button => !button.disabled && button.textContent === ${JSON.stringify(text)})`;
 const bookingVisible = text => `document.querySelector('[aria-label="Session bookings"]')?.textContent.includes(${JSON.stringify(text)})`;
 
-test('Booking management in Chrome displays transitions and handles stale capacity, membership eligibility, and session expiry', browserTest, async () => {
+test('Booking management in Chrome displays transitions and handles stale conflicts and session expiry', browserTest, async () => {
   const { admin, session, clientId, otherClient, membership, time, otherMembership } = await dashboardBookingFixture();
   const { bookingId: otherBooking } = await relay(admin, 201, bookingApi, {
     method: 'POST', payload: { clientId: otherClient, membershipId: otherMembership.id, scheduledSessionId: session.id },
@@ -1197,6 +1197,15 @@ test('Booking management in Chrome displays transitions and handles stale capaci
     await relay(admin, 204, bookingApi + '/' + otherBooking + '/cancel', { method: 'POST', payload: { reason: 'Seat released' } });
     await click('Refresh bookings');
     await browser.until(bookingVisible('0 of 1 seats occupied'), 'released capacity');
+
+    // Simulate an open dashboard whose selected session has since started.
+    await fixture.scheduledSession.update({ where: { id: session.id }, data: {
+      startsAt: new Date(+session.startsAt - 4 * 86400_000), endsAt: new Date(+session.endsAt - 4 * 86400_000),
+    } });
+    await click('Approve');
+    await browser.until(bookingVisible('The scheduled session has already started.'), 'started session conflict');
+    assert.equal((await fixture.booking.findUniqueOrThrow({ where: { id: own.id } })).status, 'PENDING');
+    await fixture.scheduledSession.update({ where: { id: session.id }, data: { startsAt: session.startsAt, endsAt: session.endsAt } });
 
     await fixture.membership.update({ where: { id: membership.id }, data: { validThrough: membership.validFrom } });
     await click('Approve');

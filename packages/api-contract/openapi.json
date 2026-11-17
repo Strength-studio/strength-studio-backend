@@ -2304,6 +2304,7 @@
         ]
       },
       "post": {
+        "description": "The session must start after the database time of the booking decision. Otherwise returns 409 SCHEDULE_START_IN_PAST.",
         "operationId": "BookingController_create",
         "parameters": [
           {
@@ -2426,6 +2427,7 @@
     },
     "/api/v1/bookings/{id}/approve": {
       "post": {
+        "description": "The current scheduled start must be after the database time of the approval decision. Otherwise returns 409 SCHEDULE_START_IN_PAST.",
         "operationId": "BookingController_approve",
         "parameters": [
           {

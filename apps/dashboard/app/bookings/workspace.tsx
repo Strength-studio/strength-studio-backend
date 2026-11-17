@@ -24,6 +24,7 @@ const failures: Record<string, string> = {
   MEMBERSHIP_NOT_ELIGIBLE: 'The selected membership is no longer eligible for this session. Review its coverage and available commitments.',
   BOOKING_ALREADY_EXISTS: 'This Client already has a pending or confirmed booking for the session.',
   BOOKING_STATE_CONFLICT: 'This booking changed. Review its current status before trying again.',
+  SCHEDULE_START_IN_PAST: 'The scheduled session has already started. Select a future session to make a booking.',
   SCHEDULED_SESSION_NOT_FOUND: 'The scheduled session could not be found.',
   CLIENT_NOT_FOUND: 'The Client profile could not be found.',
   BOOKING_NOT_FOUND: 'The booking could not be found.',

@@ -225,6 +225,7 @@ export class BookingService {
 
   private async requireAvailability(tx: Transaction, session: Session, clientId: string, membershipId: string, now: Date) {
     if (session.cancelledAt) throw failure(409, 'SESSION_CANCELLED');
+    if (session.startsAt <= now) throw failure(409, 'SCHEDULE_START_IN_PAST');
     const membership = await tx.membership.findUnique({ where: { id: membershipId }, select: membershipFields });
     if (!membership || membership.purchase.clientId !== clientId) throw failure(409, 'MEMBERSHIP_NOT_ELIGIBLE');
     const commitments = terms(membership).packageKind === PackageKind.SESSION
