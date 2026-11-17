@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
+const { request: httpRequest } = require('node:http');
 const { createServer } = require('node:net');
 const { resolve } = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
@@ -78,7 +79,7 @@ before(async () => {
   await new Promise((resolve, reject) => socket.close(error => error ? reject(error) : resolve()));
   origin = 'http://127.0.0.1:' + port;
   api = await startApp({ ...loadConfig({ ...process.env, DATABASE_URL: runtime.href, DASHBOARD_ORIGIN: origin }),
-    host: '127.0.0.1', port: 0 });
+    host: '127.0.0.1', port: 0, attendanceCaptureForTesting: true });
   api.getHttpServer().on('request', () => { upstreamRequests++; });
   const project = resolve(__dirname, '..');
   dashboard = spawn(process.execPath, [resolve(project, 'node_modules/next/dist/bin/next'), 'start',
@@ -929,10 +930,10 @@ test('Scheduling relay and Admin workspace support settings, assignment, editing
   assert.deepEqual(await relay(admin, 403, settingsPath, { ...settings, source: 'https://invalid.example' }), { code: 'CSRF_DENIED' });
   assert.deepEqual(await relay(admin, 403, scheduleApi, { ...create, csrf: '' }), { code: 'CSRF_DENIED' });
   assert.deepEqual(await relay(admin, 400, scheduleApi, { ...create, key: '' }), { code: 'INVALID_IDEMPOTENCY_KEY' });
-  assert.deepEqual(await relay(admin, 404, 'scheduling/my-sessions' + q), { code: 'NOT_FOUND' });
   assert.deepEqual(await relay(admin, 404, scheduleApi + '/bad-id/cancel', create), { code: 'NOT_FOUND' });
   assert.deepEqual(await relay(admin, 400, scheduleApi + q + '&extra=yes'), { code: 'INVALID_INPUT' });
   assert.equal(upstreamRequests, before);
+  assert.equal((await relay(admin, 403, 'scheduling/my-sessions' + q)).code, 'FORBIDDEN');
   await relay({ cookie: '' }, 401, scheduleApi + q);
   for (const role of ['noGrant', 'coach', 'client']) {
     const actor = await signIn(role);
@@ -1041,8 +1042,8 @@ const bookingApi = 'bookings';
 const bookingQuery = id => '?scheduledSessionId=' + id;
 const approvalPath = id => bookingApi + '/' + id + '/approve';
 
-async function dashboardBookingFixture() {
-  const admin = await signIn('admin');
+async function dashboardBookingFixture(adminSession) {
+  const admin = adminSession ?? await signIn('admin');
   const { sessionTypeId } = await dashboardScheduleFixture(admin);
   const { id: coachId } = await fixture.user.create({ data: {
     normalizedEmail: randomUUID() + '@coach.example', role: 'COACH', accountState: 'ACTIVE',
@@ -1272,6 +1273,134 @@ test('Booking management in Chrome protects history after switching to a Staff a
     await traverseHistory(t, browser, 'Back', bookingsPath,
       alertIs('Your account does not have access to Booking management.'), { denied: true, fresh: true });
     assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Session bookings"]') === null`), true);
+  });
+});
+
+const attendancePage = '/attendance';
+const attendanceDetail = id => 'attendance/sessions/' + id;
+const attendanceLink = id => attendancePage + bookingQuery(id);
+const attendanceVisible = text => `document.querySelector('[aria-label="Session attendance"]')?.textContent.includes(${JSON.stringify(text)})`;
+
+async function dashboardAttendanceFixture(minutesAgo, adminSession) {
+  const { admin, session, clientId, otherClient, membership, otherMembership } = await dashboardBookingFixture(adminSession);
+  const { id: coachId } = await fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email('coach') } });
+  const startsAt = new Date(Date.now() - minutesAgo * 60_000);
+  const endsAt = new Date(+startsAt + 60 * 60_000);
+  const own = await fixture.scheduledSession.update({ where: { id: session.id }, data: { coachId, startsAt, endsAt } });
+  const foreign = await fixture.scheduledSession.create({ data: {
+    coachId: session.coachId, sessionTypeId: session.sessionTypeId, startsAt, endsAt, capacity: 1, bufferMinutes: 0,
+  } });
+  const confirmed = await fixture.booking.create({ data: {
+    clientId, membershipId: membership.id, scheduledSessionId: own.id, status: 'CONFIRMED',
+  } });
+  await fixture.booking.create({ data: {
+    clientId: otherClient, membershipId: otherMembership.id, scheduledSessionId: own.id, status: 'PENDING',
+  } });
+  return { admin, coach: await signIn('coach'), own, foreign, confirmed };
+}
+
+test('Attendance relay enforces exact scope, methods, projection and write protections', async () => {
+  const { admin, coach, own, foreign, confirmed } = await dashboardAttendanceFixture(180);
+  const path = attendanceDetail(own.id);
+  const submit = path + '/submit';
+  const payload = { expectedScheduleRevision: own.revision,
+    entries: [{ bookingId: confirmed.id, expectedRevision: 0, outcome: 'ATTENDED' }] };
+  const post = { method: 'POST', payload, key: randomUUID() };
+  const before = upstreamRequests;
+  await relay(coach, 404, 'attendance/sessions/bad-id');
+  await relay(coach, 404, path + '/verify', post);
+  await relay(coach, 405, path, post);
+  await relay(coach, 405, path, { method: 'OPTIONS' });
+  const wrongMethod = await fetch(origin + '/api/studio/v1/' + submit);
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST');
+  assert.equal(wrongMethod.headers.get('cache-control'), 'no-store');
+  await relay(coach, 400, path + '?limit=2&limit=3');
+  await relay(coach, 400, 'scheduling/my-sessions' + scheduleWindow() + '&coachId=' + own.coachId);
+  await relay(coach, 400, submit + '?extra=yes', post);
+  assert.deepEqual(await relay(coach, 403, submit, { ...post, source: 'https://invalid.example' }), { code: 'CSRF_DENIED' });
+  const forgedHost = await new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const request = httpRequest(origin + '/api/studio/v1/' + submit, {
+      method: 'POST', headers: { host: 'invalid.example', origin, cookie: coach.cookie, 'x-csrf-token': coach.csrf,
+        'idempotency-key': post.key, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    }, response => {
+      let raw = '';
+      response.setEncoding('utf8').on('data', chunk => { raw += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, cache: response.headers['cache-control'], raw }));
+      response.on('error', reject);
+    });
+    request.on('error', reject);
+    request.end(body);
+  });
+  assert.deepEqual(forgedHost, { status: 403, cache: 'no-store', raw: '{"code":"CSRF_DENIED"}' });
+  assert.deepEqual(await relay(coach, 403, submit, { ...post, csrf: admin.csrf }), { code: 'CSRF_DENIED' });
+  assert.deepEqual(await relay(coach, 400, submit, { ...post, key: '' }), { code: 'INVALID_IDEMPOTENCY_KEY' });
+  await relay(coach, 413, submit, { ...post, payload: { fields: 'x'.repeat(17_000) } });
+  assert.equal(upstreamRequests, before);
+  await relay({ cookie: '' }, 401, path);
+  await relay(coach, 404, attendanceDetail(foreign.id));
+  await relay(admin, 403, submit, post);
+  const roster = await relay(coach, 200, path);
+  assert.deepEqual(roster.items, [{ bookingId: confirmed.id, clientDisplayName: clientName('client'),
+    bookingStatus: 'CONFIRMED', revision: 0, outcome: null, reviewStatus: 'UNSUBMITTED', submittedAt: null }]);
+  assert.doesNotMatch(JSON.stringify(roster), /membership|payment|purchase|commission|private fixture/i);
+  await relay(coach, 204, submit, post);
+  await relay(coach, 204, submit, post);
+  assert.equal((await relay(admin, 200, path)).items[0].reviewStatus, 'PENDING_REVIEW');
+  assert.equal(await fixture.attendanceRevision.count({ where: { bookingId: confirmed.id } }), 1);
+});
+
+test('Attendance in Chrome supports Coach submission and Admin read-only review, including account switch', browserTest, async t => {
+  const { admin, coach, own, foreign, confirmed } = await dashboardAttendanceFixture(30, await login('admin'));
+  const staff = await signIn('noGrant');
+  await withChrome(origin, clientName('client'), async browser => {
+    async function useSession(actor) {
+      for (const pair of actor.cookie.split('; ')) await browser.setCookie(origin, pair);
+    }
+    await useSession(coach);
+    await browser.go('/');
+    await browser.until(`document.querySelector('a[href="/attendance"]')?.textContent === 'Attendance'`, 'Coach attendance link');
+    await browser.evaluate(`document.querySelector('a[href="/attendance"]').click(); true`);
+    const ownLink = `document.querySelector('a[href="${attendanceLink(own.id)}"]')`;
+    await browser.until(ownLink, 'assigned session on Coach list');
+    assert.equal(await browser.evaluate(`!!document.querySelector('a[href="${attendanceLink(foreign.id)}"]')`), false);
+    await browser.evaluate(ownLink + '.click(); true');
+    await browser.until(attendanceVisible(clientName('client')), 'confirmed attendance roster');
+    assert.equal(await browser.evaluate(`!!(${attendanceVisible(clientName('clientSecond'))})`), false);
+    await browser.until(`document.querySelector('[aria-label="Session attendance"] input[type=checkbox]')`, 'attendance selection');
+    await browser.evaluate(`document.querySelector('[aria-label="Session attendance"] input[type=checkbox]').click(); true`);
+    await browser.until(`[...document.querySelectorAll('button')].some(b => b.textContent === 'Submit attendance' && !b.disabled)`,
+      'submit enabled after selection');
+    await browser.evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === 'Submit attendance').click(); true`);
+    await browser.until(attendanceVisible('Pending review'), 'pending attendance after submission refresh');
+    assert.equal(await fixture.attendanceRevision.count({ where: { bookingId: confirmed.id } }), 1);
+
+    await browser.go(attendanceLink(foreign.id));
+    await browser.until(alertIs('This scheduled session or participant could not be found.'), 'cross-Coach direct URL denial');
+    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Session attendance"] table') === null`), true);
+
+    await useSession(admin);
+    await browser.go(schedulingPage);
+    const reviewLink = `document.querySelector('a[href="${attendanceLink(own.id)}"]')`;
+    const riyadhDate = new Intl.DateTimeFormat('en-CA', { dateStyle: 'short', timeZone: 'Asia/Riyadh' }).format(own.startsAt);
+    await browser.until(`document.querySelector('form[aria-label="Schedule filters"] input[name=from]')`, 'Admin scheduling filters');
+    await browser.evaluate(`(() => {
+      const filter = document.querySelector('form[aria-label="Schedule filters"]');
+      filter.elements.from.value = ${JSON.stringify(riyadhDate)};
+      filter.requestSubmit();
+      return true;
+    })()`);
+    await browser.until(reviewLink, 'Admin review attendance link');
+    await browser.evaluate(reviewLink + '.click(); true');
+    await browser.until(`(${attendanceVisible(clientName('client'))}) && (${attendanceVisible('Pending review')})`, 'Admin pending review');
+    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Session attendance"] input[type=checkbox]') === null`), true);
+    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
+    await browser.until('location.pathname === "/" && document.readyState === "complete"', 'returned to dashboard');
+    await useSession(staff);
+    await traverseHistory(t, browser, 'Back', attendancePage, alertIs('Your account does not have access to Attendance.'),
+      { denied: true, fresh: true });
+    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Session attendance"]') === null`), true);
   });
 });
 

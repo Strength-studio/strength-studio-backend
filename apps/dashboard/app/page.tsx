@@ -90,7 +90,9 @@ export default function Home() {
         <div><strong>Strength Studio</strong><span>Studio operations</span></div></div>
       <h1>{account ? 'You’re signed in' : 'Sign in to the studio'}</h1>
       {account ? <>
-        <p className="muted">Signed in as {account.email} ({account.role}). This account has no catalog management workspace.</p>
+        <p className="muted">Signed in as {account.email} ({account.role}).
+          {account.role !== 'COACH' && ' This account has no catalog management workspace.'}</p>
+        {account.role === 'COACH' && <a className="button primary" href="/attendance">Attendance</a>}
         <button className="button secondary" type="button" disabled={busy} onClick={() => sessionAction('logout')}>Sign out</button>
       </> : <form onSubmit={login}>
         <label>Email<input name="email" type="email" autoComplete="username" required /></label>

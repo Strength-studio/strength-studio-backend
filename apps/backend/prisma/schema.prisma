@@ -92,6 +92,7 @@ enum AuditAction {
   BOOKING_APPROVED
   BOOKING_REJECTED
   BOOKING_CANCELLED
+  ATTENDANCE_SUBMITTED
 
   @@map("audit_action")
 }
@@ -110,6 +111,7 @@ enum AuditTarget {
   MEMBERSHIP
   SCHEDULED_SESSION
   BOOKING
+  ATTENDANCE_REVISION
 
   @@map("audit_target")
 }
@@ -135,6 +137,7 @@ model User {
   recordedPayments Payment[]     @relation("PaymentRecorder")
   verifiedPayments Payment[]     @relation("PaymentVerifier")
   paymentAllocations PaymentAllocation[]
+  attendanceRevisions AttendanceRevision[]
 
   @@map("app_user")
 }
@@ -158,6 +161,7 @@ model CoachProfile {
   user        User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   scheduledSessions ScheduledSession[]
+  servedAttendance SessionAttendance[]
 
   @@map("coach_profile")
 }
@@ -339,6 +343,7 @@ model SessionType {
 
   schedulingSettings SchedulingSettings?
   scheduledSessions ScheduledSession[]
+  servedAttendance SessionAttendance[]
 
   @@map("session_type")
 }
@@ -370,6 +375,7 @@ model ScheduledSession {
   coach CoachProfile @relation(fields: [coachId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
 
   bookings Booking[]
+  attendance SessionAttendance?
 
   @@index([startsAt, id])
   @@index([coachId, startsAt])
@@ -481,12 +487,60 @@ model Booking {
   scheduledSession   ScheduledSession @relation(fields: [scheduledSessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   membership         Membership       @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
+  // booking_id is unique in SQL. Prisma represents the compound relation as a list.
+  attendanceParticipants AttendanceParticipant[]
+
+  @@unique([id, scheduledSessionId], map: "booking_id_scheduled_session_id_key")
   // SQL enforces uniqueness for active bookings only.
   @@index([clientId])
   @@index([scheduledSessionId, createdAt, id])
   @@index([scheduledSessionId, status])
   @@index([membershipId, status])
   @@map("booking")
+}
+
+enum AttendanceOutcome {
+  ATTENDED
+
+  @@map("attendance_outcome")
+}
+
+model SessionAttendance {
+  scheduledSessionId  String   @id @map("scheduled_session_id") @db.Uuid
+  servedCoachId       String   @map("served_coach_id") @db.Uuid
+  servedStartsAt      DateTime @map("served_starts_at") @db.Timestamptz(6)
+  servedSessionTypeId String   @map("served_session_type_id") @db.Uuid
+  scheduledSession ScheduledSession @relation(fields: [scheduledSessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  servedCoach CoachProfile @relation(fields: [servedCoachId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
+  servedSessionType SessionType @relation(fields: [servedSessionTypeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  participants AttendanceParticipant[]
+
+  @@map("session_attendance")
+}
+
+model AttendanceParticipant {
+  bookingId          String @id @map("booking_id") @db.Uuid
+  scheduledSessionId String @map("scheduled_session_id") @db.Uuid
+  sessionAttendance SessionAttendance @relation(fields: [scheduledSessionId], references: [scheduledSessionId], onDelete: Restrict, onUpdate: NoAction)
+  booking Booking @relation(fields: [bookingId, scheduledSessionId], references: [id, scheduledSessionId], onDelete: Restrict, onUpdate: NoAction, map: "attendance_participant_booking_fkey")
+  revisions AttendanceRevision[]
+
+  @@index([scheduledSessionId])
+  @@map("attendance_participant")
+}
+
+model AttendanceRevision {
+  id            String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId     String @map("booking_id") @db.Uuid
+  revision      Int
+  outcome       AttendanceOutcome
+  submittedById String @map("submitted_by_id") @db.Uuid
+  submittedAt    DateTime @map("submitted_at") @db.Timestamptz(6)
+  participant AttendanceParticipant @relation(fields: [bookingId], references: [bookingId], onDelete: Restrict, onUpdate: NoAction)
+  submittedBy User @relation(fields: [submittedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([bookingId, revision])
+  @@map("attendance_revision")
 }
 
 enum PaymentMethod {

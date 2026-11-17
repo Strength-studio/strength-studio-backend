@@ -8,11 +8,12 @@ export type ScheduledSession = {
   status: 'SCHEDULED' | 'CANCELLED'; cancelledAt: string | null;
 };
 
-export type SchedulingRoute = 'settings' | 'coaches' | 'sessions' | 'created' | 'empty';
+export type SchedulingRoute = 'settings' | 'coaches' | 'sessions' | 'my-sessions' | 'created' | 'empty';
 export function schedulingRoute(method: string, parts: string[]): SchedulingRoute | null {
-  const [, resource, id, action] = parts;
+  const [family, resource, id, action] = parts;
+  if (family !== 'scheduling') return null;
   if (parts.length === 2) {
-    if (method === 'GET' && (resource === 'settings' || resource === 'coaches' || resource === 'sessions')) return resource;
+    if (method === 'GET' && (resource === 'settings' || resource === 'coaches' || resource === 'sessions' || resource === 'my-sessions')) return resource;
     if (method === 'POST' && resource === 'sessions') return 'created';
   }
   if (parts.length === 3 && method === 'PATCH' && (resource === 'sessions' || resource === 'settings') && uuid.test(id)) {
@@ -26,9 +27,11 @@ export function schedulingRoute(method: string, parts: string[]): SchedulingRout
 
 export function schedulingQuery(route: SchedulingRoute, params: URLSearchParams) {
   const result = new URLSearchParams();
+  const filters = ['from', 'until', 'limit', 'after'];
+  if (route === 'sessions') filters.push('coachId');
   for (const [key, value] of params) {
-    if (route !== 'sessions' || result.has(key) || !value || value.length > 64
-      || !['from', 'until', 'coachId', 'limit', 'after'].includes(key)) return null;
+    if ((route !== 'sessions' && route !== 'my-sessions') || result.has(key) || !value || value.length > 64
+      || !filters.includes(key)) return null;
     result.set(key, value);
   }
   return result;
@@ -44,7 +47,8 @@ export function schedulingResponse(route: SchedulingRoute, body: unknown) {
         ({ sessionTypeId, durationMinutes, bufferMinutes, groupCapacity }));
     case 'coaches':
       return (body as Json[]).map(coach);
-    case 'sessions': {
+    case 'sessions':
+    case 'my-sessions': {
       const { items, nextCursor } = body as { items: Json[]; nextCursor: unknown };
       return { nextCursor, items: items.map(({ id, sessionTypeId, sessionTypeName, startsAt, endsAt, bufferMinutes,
         capacity, revision, status, cancelledAt, coach: assignment }) =>

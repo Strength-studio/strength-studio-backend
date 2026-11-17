@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { attendanceQuery, attendanceResponse, attendanceRoute } from '../../../../../lib/attendance';
 import { bookingQuery, bookingResponse, bookingRoute, isBookingPath } from '../../../../../lib/bookings';
 import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
 import { clientQuery, clientRoute, isClientRelayPath, readClientRoute } from '../../../../../lib/client-relay';
@@ -23,6 +24,18 @@ function rejectedBookingRequest(parts: string[]) {
   return response;
 }
 
+function attendanceOrOwnSchedulePath(parts: string[]) {
+  return parts[0] === 'attendance' || (parts[0] === 'scheduling' && parts[1] === 'my-sessions');
+}
+
+function rejectedAttendanceRequest(parts: string[]) {
+  const method = ['GET', 'POST'].find(method => attendanceRoute(method, parts) || schedulingRoute(method, parts) === 'my-sessions');
+  if (!method) return reply({ code: 'NOT_FOUND' }, 404);
+  const response = reply({ code: 'METHOD_NOT_ALLOWED' }, 405);
+  response.headers.set('Allow', method);
+  return response;
+}
+
 async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST' | 'PATCH') {
   const { path: parts } = await route.params;
   if (parts[0] === 'purchases') return purchaseRelay(request, parts);
@@ -34,7 +47,9 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
   const client = clientRoute(request.method, parts);
   if (!booking && isClientRelayPath(parts) && !client) return rejectedClientRequest(parts);
   const scheduling = parts[0] === 'scheduling' ? schedulingRoute(request.method, parts) : null;
-  if (!legacy && !catalog && !client && !scheduling && !booking) return reply({ code: 'NOT_FOUND' }, 404);
+  const attendance = attendanceRoute(request.method, parts);
+  if (!attendance && !scheduling && attendanceOrOwnSchedulePath(parts)) return rejectedAttendanceRequest(parts);
+  if (!legacy && !catalog && !client && !scheduling && !booking && !attendance) return reply({ code: 'NOT_FOUND' }, 404);
   const token = request.cookies.get(accessCookie)?.value;
   if (!token) return reply({ code: 'UNAUTHENTICATED' }, 401);
   try {
@@ -55,7 +70,8 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
       const result = await readClientRoute(client, parts.join('/'), token, query);
       return result.ok ? reply(result.data) : reply(result.error, result.status);
     }
-    const query = booking ? bookingQuery(booking, request.nextUrl.searchParams)
+    const query = attendance ? attendanceQuery(attendance, request.nextUrl.searchParams)
+      : booking ? bookingQuery(booking, request.nextUrl.searchParams)
       : scheduling ? schedulingQuery(scheduling, request.nextUrl.searchParams)
       : catalog ? catalogQuery(catalog, request.nextUrl.searchParams) : null;
     if (!query) return reply({ code: 'INVALID_INPUT' }, 400);
@@ -71,6 +87,7 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
     if (!result.ok) return reply(await catalogError(result), result.status);
     if (result.status === 204) return new NextResponse(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
     const body = await result.json();
+    if (attendance) return reply(attendanceResponse(body), result.status);
     return reply(booking ? bookingResponse(booking, body) : scheduling ? schedulingResponse(scheduling, body) : catalogResponse(catalog!, body), result.status);
   } catch {
     return reply({ code: 'DASHBOARD_UNAVAILABLE' }, 503);
@@ -88,6 +105,7 @@ export function HEAD(request: NextRequest, route: Route) {
 export async function OPTIONS(request: NextRequest, route: Route) {
   const { path } = await route.params;
   if (path[0] === 'purchases') return purchaseRelay(request, path);
+  if (attendanceOrOwnSchedulePath(path)) return rejectedAttendanceRequest(path);
   if (isBookingPath(path)) return rejectedBookingRequest(path);
   if (isClientRelayPath(path)) return rejectedClientRequest(path);
   return new NextResponse(null, { status: 204, headers: { Allow: 'GET, HEAD, OPTIONS, PATCH, POST' } });
@@ -104,6 +122,7 @@ export function PATCH(request: NextRequest, route: Route) {
 export async function PUT(request: NextRequest, route: Route) {
   const { path } = await route.params;
   if (path[0] === 'purchases') return purchaseRelay(request, path);
+  if (attendanceOrOwnSchedulePath(path)) return rejectedAttendanceRequest(path);
   if (isBookingPath(path)) return rejectedBookingRequest(path);
   return isClientRelayPath(path) ? rejectedClientRequest(path) : new NextResponse(null, { status: 405 });
 }
