@@ -5,12 +5,14 @@ export type Action = 'account.self' | 'client.manage' | 'user.manage' | 'staff.g
   | 'catalog.read' | 'catalog.manage' | 'audit.read' | 'purchase.accept_record' | 'purchase.funding.read'
   | 'payment.record' | 'payment.verify' | 'payment.allocate'
   | 'schedule.read' | 'schedule.manage' | 'schedule.read_own'
-  | 'booking.read' | 'booking.assist' | 'booking.approve' | 'booking.cancel.decide';
+  | 'booking.read' | 'booking.assist' | 'booking.approve' | 'booking.cancel.decide'
+  | 'attendance.read' | 'attendance.submit';
 
 export const staffPermissions = new Map(
   Object.values(StaffPermission)
     .filter(value => value !== StaffPermission.MEMBERSHIP_ACTIVATE && value !== StaffPermission.PAYMENT_VERIFY
-      && value !== StaffPermission.PAYMENT_ALLOCATE && !value.startsWith('BOOKING_'))
+      && value !== StaffPermission.PAYMENT_ALLOCATE && value !== StaffPermission.ATTENDANCE_READ
+      && !value.startsWith('BOOKING_'))
     .map(value => [value.toLowerCase().replaceAll('_', '.'), value]),
 );
 
@@ -19,7 +21,7 @@ const adminActions = new Set<Action>([
   'membership.activate', 'membership.activate_exception', 'commission.read',
   'catalog.read', 'catalog.manage', 'audit.read', 'purchase.accept_record', 'purchase.funding.read',
   'payment.record', 'payment.verify', 'payment.allocate', 'schedule.read', 'schedule.manage',
-  'booking.read', 'booking.assist', 'booking.approve', 'booking.cancel.decide',
+  'booking.read', 'booking.assist', 'booking.approve', 'booking.cancel.decide', 'attendance.read',
 ]);
 
 const staffActions = new Set<Action>(['client.manage', 'catalog.read', 'catalog.manage', 'audit.read', 'payment.record']);
@@ -27,7 +29,7 @@ const staffActions = new Set<Action>(['client.manage', 'catalog.read', 'catalog.
 export function hasAction(role: Role, grants: StaffPermission[], action: Action): boolean {
   if (action === 'account.self') return Object.values(Role).includes(role);
   if (role === Role.ADMIN) return adminActions.has(action);
-  if (role === Role.COACH) return action === 'schedule.read_own';
+  if (role === Role.COACH) return action === 'schedule.read_own' || action === 'attendance.read' || action === 'attendance.submit';
   if (role === Role.CLIENT) return action === 'catalog.read';
   if (role !== Role.STAFF || !staffActions.has(action)) return false;
   const permission = staffPermissions.get(action);

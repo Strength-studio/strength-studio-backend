@@ -2615,6 +2615,139 @@
           "Booking management"
         ]
       }
+    },
+    "/api/v1/attendance/sessions/{sessionId}": {
+      "get": {
+        "operationId": "AttendanceController_detail",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceDetailDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid session ID, query, or roster cursor"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read the confirmed roster and submitted attendance (Admin or assigned Coach)",
+        "tags": [
+          "Attendance"
+        ]
+      }
+    },
+    "/api/v1/attendance/sessions/{sessionId}/submit": {
+      "post": {
+        "description": "Requires database time at or after scheduled start. Production capture remains gated pending the O-09 deadline.",
+        "operationId": "AttendanceController_submit",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitAttendanceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid JSON, submission fields, duplicate bookings, or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "Capture gate, schedule or booking state, stale revision, or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Submit attendance for explicitly selected confirmed participants (assigned Coach only)",
+        "tags": [
+          "Attendance"
+        ]
+      }
     }
   },
   "info": {
@@ -4053,6 +4186,222 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "ServedAttributionDto": {
+        "type": "object",
+        "properties": {
+          "coachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "coachDisplayName": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sessionTypeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionTypeName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "coachId",
+          "coachDisplayName",
+          "startsAt",
+          "sessionTypeId",
+          "sessionTypeName"
+        ]
+      },
+      "AttendanceSessionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionTypeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionTypeName": {
+            "type": "string"
+          },
+          "coach": {
+            "$ref": "#/components/schemas/EligibleCoachDto"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "served": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServedAttributionDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "sessionTypeId",
+          "sessionTypeName",
+          "coach",
+          "startsAt",
+          "endsAt",
+          "revision",
+          "cancelledAt",
+          "served"
+        ]
+      },
+      "AttendanceItemDto": {
+        "type": "object",
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clientDisplayName": {
+            "type": "string"
+          },
+          "bookingStatus": {
+            "type": "string",
+            "enum": [
+              "CONFIRMED",
+              "CANCELLED"
+            ]
+          },
+          "revision": {
+            "type": "number"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ATTENDED"
+            ],
+            "nullable": true
+          },
+          "reviewStatus": {
+            "type": "string",
+            "enum": [
+              "UNSUBMITTED",
+              "PENDING_REVIEW"
+            ]
+          },
+          "submittedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "bookingId",
+          "clientDisplayName",
+          "bookingStatus",
+          "revision",
+          "outcome",
+          "reviewStatus",
+          "submittedAt"
+        ]
+      },
+      "AttendanceDetailDto": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/AttendanceSessionDto"
+          },
+          "serverTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "submissionEnabled": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceItemDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "session",
+          "serverTime",
+          "submissionEnabled",
+          "items",
+          "nextCursor"
+        ]
+      },
+      "SubmissionEntryDto": {
+        "type": "object",
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "Use zero for the first submission."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ATTENDED"
+            ]
+          }
+        },
+        "required": [
+          "bookingId",
+          "expectedRevision",
+          "outcome"
+        ]
+      },
+      "SubmitAttendanceDto": {
+        "type": "object",
+        "properties": {
+          "expectedScheduleRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "entries": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubmissionEntryDto"
+            }
+          }
+        },
+        "required": [
+          "expectedScheduleRevision",
+          "entries"
         ]
       }
     }

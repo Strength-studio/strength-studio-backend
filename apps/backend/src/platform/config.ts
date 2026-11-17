@@ -7,6 +7,8 @@ export interface Config {
   host: string;
   port: number;
   socketRecheckMs: number;
+  // Disposable integration instances can exercise capture before the production deadline is approved.
+  attendanceCaptureForTesting?: true;
 }
 
 export function loadConfig(env = process.env): Config {

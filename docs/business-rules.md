@@ -53,8 +53,9 @@ Clients may hold several active memberships with independent validity, units, fu
 | HELD → CONFIRMED / REJECTED / WITHDRAWN / EXPIRED | Authorized approval rechecks expiry, eligibility, capacity, availability, and client overlap/limit. Terminal non-confirmation releases capacity. Effective expiry is based on database time. |
 | Cancellation or move requested | The confirmed participant stays unchanged. Rejection or withdrawal changes only the request. Approved move locks both slots and commits the replacement and decision together. A failed move preserves the original seat. |
 | Coach replacement | Release old reservation and insert replacement atomically. Preserve both records. Approved unavailability flags affected bookings for explicit action. Ordinary replacement stops after service starts. |
-| Attendance submitted or returned | Assigned service coach submits a per-participant revision. Attendance counts as held only after Coach completion submission and Admin verification. Late submissions are flagged and still accepted for Admin review. A return requires a reason. Resubmission appends a revision. No debit. |
-| Admin verifies or corrects | Verification records the accepted charge and policy. For a chargeable session package, post the debit in the same transaction. A correction keeps the last accepted result until accepted and then appends only the delta. Time-based or nonchargeable results have zero charge. |
+| Attendance submitted | At or after scheduled start, the assigned Coach may record completion for explicitly selected confirmed participants. The production submission deadline remains gated by O-09. Submission freezes service attribution and appends participant revisions. Omitted participants remain unsubmitted. Attendance counts as held only after Coach submission and Admin verification. Submission posts no debit. |
+| Attendance returned (deferred) | Admin return requires a reason. A Coach resubmission appends a revision. Return posts no debit. |
+| Admin verifies or corrects (deferred) | Verification records the accepted charge and policy. For a chargeable session package, post the debit in the same transaction. A correction keeps the last accepted result until accepted and then appends only the delta. Time-based or nonchargeable results have zero charge. |
 
 ### Hold expiry and seat locks
 

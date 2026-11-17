@@ -1,0 +1,67 @@
+import { bookingId } from './bookings';
+import type { Page } from './catalog';
+import type { Coach } from './scheduling';
+
+export type AttendanceItem = {
+  bookingId: string;
+  clientDisplayName: string;
+  bookingStatus: 'CONFIRMED' | 'CANCELLED';
+  revision: number;
+  outcome: 'ATTENDED' | null;
+  reviewStatus: 'UNSUBMITTED' | 'PENDING_REVIEW';
+  submittedAt: string | null;
+};
+
+export type AttendanceDetail = Page<AttendanceItem> & {
+  session: {
+    id: string;
+    sessionTypeId: string;
+    sessionTypeName: string;
+    coach: Coach;
+    startsAt: string;
+    endsAt: string;
+    revision: number;
+    cancelledAt: string | null;
+    served: { coachId: string; coachDisplayName: string; startsAt: string; sessionTypeId: string; sessionTypeName: string } | null;
+  };
+  serverTime: string;
+  submissionEnabled: boolean;
+};
+
+type AttendanceRoute = 'detail' | 'submit';
+
+export function attendanceRoute(method: string, parts: string[]): AttendanceRoute | null {
+  const [resource, collection, id, action] = parts;
+  if (resource !== 'attendance' || collection !== 'sessions' || !id || !bookingId.test(id)) return null;
+  if (parts.length === 3 && method === 'GET') return 'detail';
+  if (parts.length === 4 && method === 'POST' && action === 'submit') return 'submit';
+  return null;
+}
+
+export function attendanceQuery(route: AttendanceRoute, input: URLSearchParams) {
+  const query = new URLSearchParams();
+  for (const [key, value] of input) {
+    if (route !== 'detail' || query.has(key)) return null;
+    if (!(key === 'after' && bookingId.test(value) || key === 'limit' && /^(?:[1-9][0-9]?|100)$/.test(value))) return null;
+    query.set(key, value);
+  }
+  return query;
+}
+
+export function attendanceResponse(body: unknown): AttendanceDetail {
+  const { session, items, nextCursor, serverTime, submissionEnabled } = body as AttendanceDetail;
+  const { id, sessionTypeId, sessionTypeName, coach, startsAt, endsAt, revision, cancelledAt, served } = session;
+  return {
+    session: {
+      id, sessionTypeId, sessionTypeName, coach: { id: coach.id, displayName: coach.displayName },
+      startsAt, endsAt, revision, cancelledAt,
+      served: served ? {
+        coachId: served.coachId, coachDisplayName: served.coachDisplayName, startsAt: served.startsAt,
+        sessionTypeId: served.sessionTypeId, sessionTypeName: served.sessionTypeName,
+      } : null,
+    },
+    serverTime, submissionEnabled, nextCursor,
+    items: items.map(({ bookingId, clientDisplayName, bookingStatus, revision, outcome, reviewStatus, submittedAt }) =>
+      ({ bookingId, clientDisplayName, bookingStatus, revision, outcome, reviewStatus, submittedAt })),
+  };
+}

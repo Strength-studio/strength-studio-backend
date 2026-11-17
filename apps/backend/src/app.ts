@@ -5,6 +5,8 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { json } from 'express';
 import helmet from 'helmet';
+import { AttendanceController } from './attendance/attendance.controller';
+import { AttendanceService } from './attendance/attendance.service';
 import { BookingController } from './bookings/booking.controller';
 import { BookingService } from './bookings/booking.service';
 import { CatalogController } from './catalog/catalog.controller';
@@ -41,11 +43,12 @@ export async function createApp(config: Config) {
     module: AppModule,
     imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
     controllers: [HealthController, AuthController, AccountsController, StudioController, DeferredController, CatalogController,
-      ClientController, ComplimentaryController, PositivePriceController, PaymentController, PurchaseFundingController, SchedulingController, BookingController],
+      ClientController, ComplimentaryController, PositivePriceController, PaymentController, PurchaseFundingController, SchedulingController,
+      BookingController, AttendanceController],
     providers: [
       { provide: CONFIG, useValue: config },
       Database, Sessions, AccessEvents, Commands, Realtime, CatalogService, ClientService, PurchaseAcceptanceService, PaymentService,
-      PurchaseFundingService, MembershipActivationService, SchedulingService, BookingService,
+      PurchaseFundingService, MembershipActivationService, SchedulingService, BookingService, AttendanceService,
       { provide: APP_GUARD, useClass: ThrottlerGuard },
       { provide: APP_GUARD, useClass: AccessGuard },
     ],

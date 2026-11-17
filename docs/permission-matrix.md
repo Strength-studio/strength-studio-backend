@@ -41,13 +41,15 @@ This is the canonical action and resource map for the [API contract](api-contrac
 | `booking.read`, `booking.request`, `booking.assist` | Read and assist | `booking.read`, `booking.assist` independently | Assigned booking reads only | Own reads and requests |
 | `booking.approve`, `booking.cancel.decide`, `booking.reschedule.decide` | Yes | Same named grants, independently | No | No |
 | `booking.waitlist.promote` | If enabled | Same named grant if enabled | No | No |
-| `attendance.submit` | Use correction path | No | Served participants only | No |
-| `attendance.read` | Yes | `attendance.read` | Served participants only | Own permitted outcomes |
-| `attendance.verify`, `attendance.correct` | Yes | No | No | No |
+| `attendance.submit` | No | No | Explicit confirmed participants in an assigned session, subject to the submission gate | No |
+| `attendance.read` | Read-only roster and review | No | Assigned roster and own served history only | No |
+| `attendance.verify`, `attendance.correct` (deferred) | Admin only when implemented | No | No | No |
 | `report.read`, `report.export`, `audit.read` | Yes | Same named grants, independently | Own permitted operational report reads only | Own permitted report reads only |
 | `commission.read`, `commission.record`, `commission.distribute`, `commission.export`, `commission.audit` | **Admin only** | **Denied with all grants** | **Denied** | **Denied** |
 
 Booking Management Slice 1 enables `booking.read`, `booking.assist`, `booking.approve`, and `booking.cancel.decide` for Admin only. Approval and rejection share `booking.approve`. Staff booking grants remain dormant, including existing stored grants. The booking rows above describe the broader role design for future slices.
+
+Attendance Slice 1 retains the legacy `ATTENDANCE_READ` enum for stored grants. Those grants confer no access and the Staff grant writer rejects new assignments.
 
 Booking requests include cancellation and reschedule requests, not their approval. Waitlist join and withdrawal use the same own-request scope if enabled. Operational exports require both the relevant read and export permissions. Operational audit access never includes private commission audit.
 

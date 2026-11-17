@@ -223,6 +223,7 @@ export function ScheduleWorkspace() {
             <td>{session.bufferMinutes} min</td><td>{session.capacity}</td><td>{session.status === 'CANCELLED' ? 'Cancelled' : 'Scheduled'}</td>
             <td><div className="button-row">
               <a className="button quiet" href={'/bookings?scheduledSessionId=' + session.id}>Bookings</a>
+              <a className="button quiet" href={'/attendance?scheduledSessionId=' + session.id}>Review attendance</a>
               {editable && <>
                 <button className="button quiet" type="button" disabled={busy} onClick={() => setEditor({ kind: 'edit', session })}>Edit</button>
                 <button className="button quiet" type="button" disabled={busy} onClick={() => setEditor({ kind: 'cancel', session })}>Cancel</button>
