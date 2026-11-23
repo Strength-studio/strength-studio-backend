@@ -1,6 +1,8 @@
 # Strength Studio
 
-Foundation, public package catalog, and read-only Client Management for the single-studio management platform. The workspace contains a NestJS API and a Next.js operations dashboard. The Flutter directory records the mobile contract for its later interface milestone.
+Single-studio management platform with a NestJS API and Next.js operations dashboard. Implemented slices include identity, public catalog, Client reads, purchases/payments and explicit Membership activation, scheduling, booking, and production-gated attendance submission/return/reaffirmation. The Flutter directory is a documented placeholder, not a delivered mobile application.
+
+The [consolidation inventory](docs/consolidation/worktree-inventory.md) records source provenance and historical branches. The [consolidation report](docs/consolidation/final-consolidation-report.md) distinguishes integrated, verified, future and production-enabled capabilities. The [application roadmap](docs/milestone-3-next-slices.md) and [pending O-09 owner brief](docs/milestone-3-o09-owner-decision-brief.md) describe proposed work without enabling it.
 
 ## Local setup
 

@@ -5,6 +5,17 @@ M3-T01 version parity, M3-T02 Client-history reliability, O-09 decision facilita
 and whole-application planning. No new business capability or production activation
 is authorized by this report.
 
+**Publication note:** This records the original technical-readiness increment and
+its local delivery state. The work was subsequently published as
+`d1c45d999a2b1c93d3c94f52061efdb1f5835d91` on
+`origin/codex/m3-technical-readiness`;
+[Foundation run 45243957593](https://github.com/Strength-studio/strength-studio-backend/actions/runs/45243957593)
+completed successfully for that exact SHA. Statements below about this increment
+being uncommitted describe its original delivery, not the later publication.
+Its integration and current publication state are recorded in the
+[consolidation report](consolidation/final-consolidation-report.md). No policy
+approval, production migration or deployment is inferred from publication or CI.
+
 ## Baseline, branch and preservation
 
 Fresh `git fetch --prune origin` confirmed the expected canonical baseline:
