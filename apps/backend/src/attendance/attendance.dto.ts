@@ -1,7 +1,7 @@
 import { AttendanceOutcome, BookingStatus } from '@prisma/client';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsInt, IsObject, IsUUID, Max, Min, ValidateIf, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsInt, IsObject, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf, ValidateNested } from 'class-validator';
 import { EligibleCoachDto } from '../scheduling/scheduling.dto';
 
 const maxInt = 2_147_483_647;
@@ -44,6 +44,57 @@ export class SubmitAttendanceDto {
   entries!: SubmissionEntryDto[];
 }
 
+class AttendanceRevisionCommandDto {
+  @ApiProperty({ type: 'integer', minimum: 1, maximum: maxInt })
+  @IsInt() @Min(1) @Max(maxInt)
+  expectedScheduleRevision!: number;
+
+  @ApiProperty({ type: 'integer', minimum: 1, maximum: maxInt })
+  @IsInt() @Min(1) @Max(maxInt)
+  expectedRevision!: number;
+}
+
+export class ReturnAttendanceDto extends AttendanceRevisionCommandDto {
+  @ApiProperty({ minLength: 1, maxLength: 1000, description: 'Mandatory Admin reason, trimmed before validation.' })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Matches(/\S/) @MaxLength(1000)
+  reason!: string;
+}
+
+export class ReaffirmAttendanceDto extends AttendanceRevisionCommandDto {
+  @ApiProperty({ format: 'uuid', description: 'Acknowledges reviewing the reason on this exact return decision.' })
+  @IsUUID()
+  reviewedReturnId!: string;
+
+  @ApiProperty({ enum: AttendanceOutcome })
+  @IsIn([AttendanceOutcome.ATTENDED])
+  outcome!: AttendanceOutcome;
+}
+
+export class AttendanceReturnDto {
+  @ApiProperty({ format: 'uuid' }) id!: string;
+  @ApiProperty({ format: 'uuid' }) adminId!: string;
+  @ApiProperty({ enum: ['RETURNED'] }) decision!: 'RETURNED';
+  @ApiProperty() reason!: string;
+  @ApiProperty({ type: String, format: 'date-time' }) decidedAt!: Date;
+}
+
+export class AttendanceHistoryItemDto {
+  @ApiProperty({ format: 'uuid' }) id!: string;
+  @ApiProperty() revision!: number;
+  @ApiProperty({ enum: AttendanceOutcome }) outcome!: AttendanceOutcome;
+  @ApiProperty({ enum: ['ORIGINAL', 'REAFFIRMATION'] }) submissionKind!: 'ORIGINAL' | 'REAFFIRMATION';
+  @ApiProperty({ format: 'uuid' }) submittedById!: string;
+  @ApiProperty({ type: String, format: 'date-time' }) submittedAt!: Date;
+  @ApiProperty({ type: AttendanceReturnDto, nullable: true }) reviewDecision!: AttendanceReturnDto | null;
+}
+
+export class AttendanceHistoryDto {
+  @ApiProperty({ format: 'uuid' }) bookingId!: string;
+  @ApiProperty({ type: [AttendanceHistoryItemDto] }) items!: AttendanceHistoryItemDto[];
+  @ApiProperty({ type: String, format: 'uuid', nullable: true }) nextCursor!: string | null;
+}
+
 class ServedAttributionDto {
   @ApiProperty({ format: 'uuid' }) coachId!: string;
   @ApiProperty() coachDisplayName!: string;
@@ -71,7 +122,7 @@ class AttendanceItemDto {
   bookingStatus!: typeof BookingStatus.CONFIRMED | typeof BookingStatus.CANCELLED;
   @ApiProperty() revision!: number;
   @ApiProperty({ enum: AttendanceOutcome, nullable: true }) outcome!: AttendanceOutcome | null;
-  @ApiProperty({ enum: ['UNSUBMITTED', 'PENDING_REVIEW'] }) reviewStatus!: 'UNSUBMITTED' | 'PENDING_REVIEW';
+  @ApiProperty({ enum: ['UNSUBMITTED', 'PENDING_REVIEW', 'RETURNED'] }) reviewStatus!: 'UNSUBMITTED' | 'PENDING_REVIEW' | 'RETURNED';
   @ApiProperty({ type: String, format: 'date-time', nullable: true }) submittedAt!: Date | null;
 }
 
@@ -79,6 +130,7 @@ export class AttendanceDetailDto {
   @ApiProperty({ type: AttendanceSessionDto }) session!: AttendanceSessionDto;
   @ApiProperty({ type: String, format: 'date-time' }) serverTime!: Date;
   @ApiProperty() submissionEnabled!: boolean;
+  @ApiProperty() returnEnabled!: boolean;
   @ApiProperty({ type: [AttendanceItemDto] }) items!: AttendanceItemDto[];
   @ApiProperty({ type: String, format: 'uuid', nullable: true }) nextCursor!: string | null;
 }

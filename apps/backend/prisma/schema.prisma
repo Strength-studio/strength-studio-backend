@@ -93,6 +93,8 @@ enum AuditAction {
   BOOKING_REJECTED
   BOOKING_CANCELLED
   ATTENDANCE_SUBMITTED
+  ATTENDANCE_RETURNED
+  ATTENDANCE_REAFFIRMED
 
   @@map("audit_action")
 }
@@ -112,6 +114,7 @@ enum AuditTarget {
   SCHEDULED_SESSION
   BOOKING
   ATTENDANCE_REVISION
+  ATTENDANCE_REVIEW_DECISION
 
   @@map("audit_target")
 }
@@ -138,6 +141,7 @@ model User {
   verifiedPayments Payment[]     @relation("PaymentVerifier")
   paymentAllocations PaymentAllocation[]
   attendanceRevisions AttendanceRevision[]
+  attendanceReviewDecisions AttendanceReviewDecision[]
 
   @@map("app_user")
 }
@@ -538,9 +542,30 @@ model AttendanceRevision {
   submittedAt    DateTime @map("submitted_at") @db.Timestamptz(6)
   participant AttendanceParticipant @relation(fields: [bookingId], references: [bookingId], onDelete: Restrict, onUpdate: NoAction)
   submittedBy User @relation(fields: [submittedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reviewDecision AttendanceReviewDecision?
 
   @@unique([bookingId, revision])
   @@map("attendance_revision")
+}
+
+enum AttendanceReviewOutcome {
+  RETURNED
+
+  @@map("attendance_review_outcome")
+}
+
+model AttendanceReviewDecision {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  revisionId String @unique @map("revision_id") @db.Uuid
+  adminId String @map("admin_id") @db.Uuid
+  decision AttendanceReviewOutcome
+  reason String
+  decidedAt DateTime @map("decided_at") @db.Timestamptz(6)
+  revision AttendanceRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  admin User @relation(fields: [adminId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([adminId])
+  @@map("attendance_review_decision")
 }
 
 enum PaymentMethod {

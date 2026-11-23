@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { attendanceQuery, attendanceResponse, attendanceRoute } from '../../../../../lib/attendance';
+import { attendanceHistoryResponse, attendanceQuery, attendanceResponse, attendanceRoute } from '../../../../../lib/attendance';
 import { bookingQuery, bookingResponse, bookingRoute, isBookingPath } from '../../../../../lib/bookings';
 import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
 import { clientQuery, clientRoute, isClientRelayPath, readClientRoute } from '../../../../../lib/client-relay';
@@ -87,7 +87,7 @@ async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST
     if (!result.ok) return reply(await catalogError(result), result.status);
     if (result.status === 204) return new NextResponse(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
     const body = await result.json();
-    if (attendance) return reply(attendanceResponse(body), result.status);
+    if (attendance) return reply(attendance === 'history' ? attendanceHistoryResponse(body) : attendanceResponse(body), result.status);
     return reply(booking ? bookingResponse(booking, body) : scheduling ? schedulingResponse(scheduling, body) : catalogResponse(catalog!, body), result.status);
   } catch {
     return reply({ code: 'DASHBOARD_UNAVAILABLE' }, 503);

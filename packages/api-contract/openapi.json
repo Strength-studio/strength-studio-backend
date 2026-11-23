@@ -2685,6 +2685,229 @@
         ]
       }
     },
+    "/api/v1/attendance/sessions/{sessionId}/participants/{bookingId}": {
+      "get": {
+        "operationId": "AttendanceController_history",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "bookingId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceHistoryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid IDs, query, or participant revision cursor"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read immutable participant submissions and Admin return decisions (Admin or assigned Coach)",
+        "tags": [
+          "Attendance"
+        ]
+      }
+    },
+    "/api/v1/attendance/sessions/{sessionId}/participants/{bookingId}/return": {
+      "post": {
+        "operationId": "AttendanceController_returnForCorrection",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "bookingId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReturnAttendanceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Return the latest pending participant revision with a mandatory reason (Admin only)",
+        "tags": [
+          "Attendance"
+        ]
+      }
+    },
+    "/api/v1/attendance/sessions/{sessionId}/participants/{bookingId}/reaffirm": {
+      "post": {
+        "description": "Appends an immutable revision; no editable attendance details or alternative outcomes. Production capture remains gated.",
+        "operationId": "AttendanceController_reaffirm",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "bookingId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReaffirmAttendanceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reaffirm ATTENDED after reviewing the latest return reason (assigned Coach only)",
+        "tags": [
+          "Attendance"
+        ]
+      }
+    },
     "/api/v1/attendance/sessions/{sessionId}/submit": {
       "post": {
         "description": "Requires database time at or after scheduled start. Production capture remains gated pending the O-09 deadline.",
@@ -4304,7 +4527,8 @@
             "type": "string",
             "enum": [
               "UNSUBMITTED",
-              "PENDING_REVIEW"
+              "PENDING_REVIEW",
+              "RETURNED"
             ]
           },
           "submittedAt": {
@@ -4336,6 +4560,9 @@
           "submissionEnabled": {
             "type": "boolean"
           },
+          "returnEnabled": {
+            "type": "boolean"
+          },
           "items": {
             "type": "array",
             "items": {
@@ -4352,8 +4579,176 @@
           "session",
           "serverTime",
           "submissionEnabled",
+          "returnEnabled",
           "items",
           "nextCursor"
+        ]
+      },
+      "AttendanceReturnDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "adminId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "RETURNED"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "adminId",
+          "decision",
+          "reason",
+          "decidedAt"
+        ]
+      },
+      "AttendanceHistoryItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ATTENDED"
+            ]
+          },
+          "submissionKind": {
+            "type": "string",
+            "enum": [
+              "ORIGINAL",
+              "REAFFIRMATION"
+            ]
+          },
+          "submittedById": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "submittedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reviewDecision": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AttendanceReturnDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "outcome",
+          "submissionKind",
+          "submittedById",
+          "submittedAt",
+          "reviewDecision"
+        ]
+      },
+      "AttendanceHistoryDto": {
+        "type": "object",
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceHistoryItemDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "bookingId",
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ReturnAttendanceDto": {
+        "type": "object",
+        "properties": {
+          "expectedScheduleRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "Mandatory Admin reason, trimmed before validation."
+          }
+        },
+        "required": [
+          "expectedScheduleRevision",
+          "expectedRevision",
+          "reason"
+        ]
+      },
+      "ReaffirmAttendanceDto": {
+        "type": "object",
+        "properties": {
+          "expectedScheduleRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "reviewedReturnId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Acknowledges reviewing the reason on this exact return decision."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ATTENDED"
+            ]
+          }
+        },
+        "required": [
+          "expectedScheduleRevision",
+          "expectedRevision",
+          "reviewedReturnId",
+          "outcome"
         ]
       },
       "SubmissionEntryDto": {

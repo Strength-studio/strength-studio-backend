@@ -82,6 +82,13 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
   --test-name-pattern='Scheduling in Chrome|Booking management in Chrome' apps/dashboard/test/catalog.integration.test.cjs
 ```
 
+Run attendance submission, participant return and Coach reaffirmation browser regressions in a fresh process.
+
+```sh
+STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket --env-file=.env --test \
+  --test-name-pattern='Attendance in Chrome' apps/dashboard/test/catalog.integration.test.cjs
+```
+
 ## Implemented scope
 
 - Argon2id sign-in for active, verified accounts, short-lived bearer tokens, refresh rotation and replay revocation, logout, and single-use socket tickets. Current roles and staff grants are checked server-side. Existing sockets disconnect on invalidation or failed revalidation.
@@ -93,6 +100,8 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
 
 - Admin Scheduling and Booking Management at `/scheduling` and `/bookings`. Open a session's booking history from Scheduling or select a session in Booking Management, then search the Client directory and choose a membership. [Booking API contract](docs/api-contract.md#implemented-booking-management-slice-1).
 
-Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. The legacy membership activation stubs and commission reads remain Admin-only and return `WORKFLOW_NOT_ENABLED`. Private offers, refunds, attendance, Redis/BullMQ delivery, SMTP, and production deployment remain deferred.
+- Production-gated attendance submission, Admin participant return and Coach ATTENDED reaffirmation at `/attendance`, with immutable submission/review history. [Attendance contract and O-09 register](docs/milestone-3-attendance-return-reaffirmation.md).
+
+Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. The legacy membership activation stubs and commission reads remain Admin-only and return `WORKFLOW_NOT_ENABLED`. Production attendance capture remains gated by O-09; Admin attendance verification, full correction and entitlement deduction remain deferred. Private offers, refunds, Redis/BullMQ delivery, SMTP, and production deployment remain deferred.
 
 See [the implementation roadmap](docs/implementation-roadmap.md), [API contract](docs/api-contract.md), and [open studio decisions](docs/open-decisions.md).

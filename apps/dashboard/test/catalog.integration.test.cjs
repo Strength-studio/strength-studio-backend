@@ -129,7 +129,7 @@ async function login(name) {
 }
 
 async function relay(actor, status, route, options = {}) {
-  const { method = 'GET', payload, key = randomUUID(), csrf = actor.csrf, source = origin, headers = {} } = options;
+  const { method = 'GET', payload, key = randomUUID(), csrf = actor.csrf, source = origin, headers = {}, allow = 'GET' } = options;
   const response = await fetch(origin + '/api/studio/v1/' + route, {
     method,
     headers: { cookie: actor.cookie, ...(method !== 'GET' ? { origin: source, 'x-csrf-token': csrf, 'idempotency-key': key } : {}),
@@ -141,7 +141,7 @@ async function relay(actor, status, route, options = {}) {
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(response.headers.get('set-cookie'), null);
   assert.equal(response.headers.get('authorization'), null);
-  if (status === 405) assert.equal(response.headers.get('allow'), 'GET');
+  if (status === 405) assert.equal(response.headers.get('allow'), allow);
   assert(!/accessToken|refreshToken|__Host-ss_/.test(raw), 'Tokens must stay server-side');
   for (const part of actor.cookie.split('; ')) assert(!raw.includes(part.split('=')[1]));
   return raw ? JSON.parse(raw) : null;
@@ -1401,6 +1401,147 @@ test('Attendance in Chrome supports Coach submission and Admin read-only review,
     await traverseHistory(t, browser, 'Back', attendancePage, alertIs('Your account does not have access to Attendance.'),
       { denied: true, fresh: true });
     assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Session attendance"]') === null`), true);
+  });
+});
+
+test('Attendance return and reaffirmation relay preserves participant history and all write protections', async () => {
+  const { admin, coach, own, foreign, confirmed } = await dashboardAttendanceFixture(90);
+  const path = attendanceDetail(own.id);
+  const record = path + '/participants/' + confirmed.id;
+  const second = await fixture.booking.findFirstOrThrow({ where: { scheduledSessionId: own.id, status: 'PENDING' } });
+  await fixture.booking.update({ where: { id: second.id }, data: { status: 'CONFIRMED' } });
+  await relay(coach, 204, path + '/submit', { method: 'POST', payload: { expectedScheduleRevision: own.revision,
+    entries: [{ bookingId: confirmed.id, expectedRevision: 0, outcome: 'ATTENDED' },
+      { bookingId: second.id, expectedRevision: 0, outcome: 'ATTENDED' }] } });
+  const original = await relay(coach, 200, record);
+  const payload = { expectedScheduleRevision: own.revision, expectedRevision: 1, reason: 'Recheck this participant completion.' };
+  const intent = { method: 'POST', payload, key: randomUUID() };
+  const before = upstreamRequests;
+  await relay(admin, 403, record + '/return', { ...intent, source: 'https://wrong.example' });
+  await relay(admin, 403, record + '/return', { ...intent, csrf: coach.csrf });
+  const forgedHost = await new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const request = httpRequest(origin + '/api/studio/v1/' + record + '/return', {
+      method: 'POST', headers: { host: 'wrong.example', origin, cookie: admin.cookie, 'x-csrf-token': admin.csrf,
+        'idempotency-key': intent.key, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    }, response => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode));
+      response.on('error', reject);
+    });
+    request.on('error', reject);
+    request.end(body);
+  });
+  assert.equal(forgedHost, 403);
+  await relay(admin, 400, record + '/return', { ...intent, key: '' });
+  await relay(admin, 400, record + '/return?extra=yes', intent);
+  await relay(admin, 413, record + '/return', { ...intent, payload: { reason: 'x'.repeat(17_000) } });
+  await relay(admin, 405, record + '/return', { allow: 'POST' });
+  await relay(admin, 405, record + '/return', { method: 'PATCH', payload, allow: 'POST' });
+  await relay(admin, 404, record + '/verify', intent);
+  await relay(admin, 404, record + '/return/extra', intent);
+  await relay(admin, 400, record + '?limit=2&limit=3');
+  assert.equal(upstreamRequests, before);
+  await relay({ cookie: '' }, 401, record);
+  await relay(coach, 403, record + '/return', intent);
+  await relay(admin, 400, record + '/return', { ...intent, payload: { ...payload, reason: '  ' } });
+  await relay(admin, 204, record + '/return', intent);
+  await relay(admin, 204, record + '/return', intent);
+  const detail = await relay(admin, 200, path);
+  assert.equal(detail.items.find(row => row.bookingId === confirmed.id).reviewStatus, 'RETURNED');
+  assert.equal(detail.items.find(row => row.bookingId === second.id).reviewStatus, 'PENDING_REVIEW');
+  const returned = await relay(coach, 200, record);
+  assert.equal(returned.items[0].reviewDecision.reason, payload.reason);
+  assert.equal(returned.items[0].reviewDecision.decision, 'RETURNED');
+  assert.doesNotMatch(JSON.stringify(returned), /membership|payment|purchase|commission|normalizedEmail/i);
+  const reaffirm = { method: 'POST', key: randomUUID(), payload: { expectedScheduleRevision: own.revision,
+    expectedRevision: 1, reviewedReturnId: returned.items[0].reviewDecision.id, outcome: 'ATTENDED' } };
+  const beforeReaffirm = upstreamRequests;
+  await relay(coach, 403, record + '/reaffirm', { ...reaffirm, source: 'https://wrong.example' });
+  await relay(coach, 403, record + '/reaffirm', { ...reaffirm, csrf: admin.csrf });
+  await relay(coach, 400, record + '/reaffirm', { ...reaffirm, key: '' });
+  await relay(coach, 405, record + '/reaffirm', { allow: 'POST' });
+  assert.equal(upstreamRequests, beforeReaffirm);
+  await relay(admin, 403, record + '/reaffirm', reaffirm);
+  for (const name of ['noGrant', 'client']) {
+    const actor = await signIn(name);
+    await relay(actor, 403, record);
+    await relay(actor, 403, record + '/return', intent);
+    await relay(actor, 403, record + '/reaffirm', reaffirm);
+  }
+  await relay(coach, 404, attendanceDetail(foreign.id) + '/participants/' + confirmed.id);
+  await relay(coach, 404, attendanceDetail(foreign.id) + '/participants/' + confirmed.id + '/reaffirm', reaffirm);
+  await relay(coach, 409, record + '/reaffirm', { ...reaffirm, payload: { ...reaffirm.payload, reviewedReturnId: randomUUID() } });
+  await relay(coach, 204, record + '/reaffirm', reaffirm);
+  await relay(coach, 204, record + '/reaffirm', reaffirm);
+  assert.equal((await relay(admin, 200, path)).items.find(row => row.bookingId === confirmed.id).reviewStatus, 'PENDING_REVIEW');
+  const history = await relay(admin, 200, record);
+  assert.equal(history.items.length, 2);
+  assert.deepEqual(history.items[1], returned.items[0]);
+  assert.equal(history.items[0].submissionKind, 'REAFFIRMATION');
+  assert.equal(original.items[0].id, history.items[1].id);
+  const page = await relay(coach, 200, record + '?limit=1');
+  assert.deepEqual((await relay(coach, 200, record + '?after=' + page.nextCursor)).items, [history.items[1]]);
+  await relay(coach, 409, record + '/reaffirm', { ...reaffirm, key: randomUUID(), payload: { ...reaffirm.payload, expectedRevision: 2 } });
+});
+
+test('Attendance in Chrome returns one participant and requires reviewing the reason before Coach reaffirmation', browserTest, async () => {
+  const { admin, coach, own, confirmed } = await dashboardAttendanceFixture(300, await login('admin'));
+  const path = attendanceDetail(own.id);
+  await withChrome(origin, clientName('client'), async browser => {
+    async function useSession(actor) {
+      for (const pair of actor.cookie.split('; ')) await browser.setCookie(origin, pair);
+      await browser.go(attendanceLink(own.id));
+      await browser.until(attendanceVisible(clientName('client')), 'attendance roster');
+    }
+    const button = label => `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)})`;
+    const open = button('Review ' + clientName('client'));
+    const returnButton = button('Return to Coach');
+    const reaffirmButton = button('Reaffirm Attended');
+    await useSession(coach);
+    assert.equal(await browser.evaluate(`!!(${open}) || !!(${reaffirmButton})`), false);
+    await relay(coach, 204, path + '/submit', { method: 'POST', payload: { expectedScheduleRevision: own.revision,
+      entries: [{ bookingId: confirmed.id, expectedRevision: 0, outcome: 'ATTENDED' }] } });
+    await useSession(coach);
+    await browser.until(open, 'participant review control');
+    await browser.evaluate(open + '.click(); true');
+    await browser.until(`document.querySelector('[aria-label="Attendance history"]')`, 'original attendance history');
+    assert.equal(await browser.evaluate(`!!(${reaffirmButton})`), false);
+
+    await useSession(admin);
+    await browser.until(open, 'Admin participant review');
+    await browser.evaluate(open + '.click(); true');
+    await browser.until(returnButton, 'mandatory reason form');
+    assert.equal(await browser.evaluate(returnButton + '.disabled'), true);
+    assert.equal(await browser.evaluate(`document.querySelector('textarea').required`), true);
+    await browser.evaluate(`(() => {
+      const input = document.querySelector('textarea');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Please review the participant completion.');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+    await browser.until(`!(${returnButton}).disabled`, 'return enabled with reason');
+    await browser.evaluate(returnButton + '.click(); true');
+    await browser.until(attendanceVisible('Attendance returned to the Coach.'), 'Admin returned status');
+    await browser.until(`document.querySelector('[aria-label="Attendance history"]')?.textContent.includes('Please review the participant completion.')`, 'return history');
+    assert.equal(await browser.evaluate(`!!(${returnButton})`), false);
+
+    await useSession(coach);
+    await browser.until(attendanceVisible('Returned'), 'Coach returned status');
+    await browser.evaluate(open + '.click(); true');
+    await browser.until(reaffirmButton, 'Coach reaffirmation control');
+    assert.equal(await browser.evaluate(reaffirmButton + '.disabled'), true);
+    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Attendance history"]').textContent.includes('Please review the participant completion.')`), true);
+    await browser.evaluate(`document.querySelector('section[aria-label^="Attendance record for"] input[type=checkbox]').click(); true`);
+    await browser.until(`!(${reaffirmButton}).disabled`, 'reaffirm enabled after reason acknowledgment');
+    await browser.evaluate(reaffirmButton + '.click(); true');
+    await browser.until(attendanceVisible('Attendance reaffirmed and submitted for review.'), 'reaffirmation success');
+    await browser.until(`document.querySelector('[aria-label="Attendance history"]')?.textContent.includes('Coach reaffirmation')`, 'new immutable revision');
+    assert.equal(await browser.evaluate(`!!(${reaffirmButton})`), false);
+    const history = await relay(admin, 200, path + '/participants/' + confirmed.id);
+    assert.equal(history.items.length, 2);
+    assert.equal(history.items[0].reviewDecision, null);
+    assert.equal(history.items[1].reviewDecision.reason, 'Please review the participant completion.');
   });
 });
 

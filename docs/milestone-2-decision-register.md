@@ -87,6 +87,10 @@ Scheduled-session cancellation preserves booking records and releases occupancy 
 
 **Owner question.** What late submission deadline, no-show/late-cancellation charges, insufficient-entitlement behavior and correction recipients apply? These determine which verified outcomes consume sessions and how exceptions are handled. Milestone 3.
 
+**23 November 2026 — approved limited resubmission contract.** The owner explicitly authorized Coach reaffirmation of `ATTENDED` after reading the Admin's mandatory return reason. Reaffirmation appends a new immutable revision for the same participant and returns it to Pending Review. The Admin actor, reason and prior submission remain in history. This authorizes no alternative outcome or editable attendance details and does not authorize verification or entitlement deduction. The production submission gate remains closed.
+
+**Open subdecisions.** O-09-A (late submission deadline), O-09-B (no-show/late-cancellation chargeability), O-09-C (insufficient entitlement), O-09-D (notification recipients), and O-09-E (Booking cancellation after submission) remain unresolved. O-09-F tracks future full correction data/outcomes; O-09-G tracks history retention/archival. The [attendance return/reaffirmation register](milestone-3-attendance-return-reaffirmation.md#o-09-and-unresolved-decisions) records each exact question, workflow, implementation impact, blocking point and explicitly labeled technical recommendation. Cancelled-record transitions are blocked while evidence remains readable; this does not settle O-09-E.
+
 ## O-10
 
 **Unresolved — commission distribution.** Commission data remains strictly Admin-only, including when the Coach is the recipient. Automatic calculation is deferred.

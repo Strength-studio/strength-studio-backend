@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AttendanceDetail } from '../../lib/attendance';
+import type { AttendanceDetail, AttendanceHistory, AttendanceItem } from '../../lib/attendance';
 import { CatalogError, CatalogWrite, dateTime, get, newWrite, Page, pagedPath, write } from '../../lib/catalog';
 import type { ScheduledSession } from '../../lib/scheduling';
 
@@ -76,6 +76,7 @@ export function AttendanceWorkspace({ sessionId, coach }: { sessionId: string; c
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [retry, setRetry] = useState<CatalogWrite>();
+  const [recordId, setRecordId] = useState<string>();
   const savingNow = useRef(false);
 
   const load = useCallback(async (after?: string) => {
@@ -150,7 +151,7 @@ export function AttendanceWorkspace({ sessionId, coach }: { sessionId: string; c
       }}>
         {detail.items.length ? <div className="schedule-table"><table>
           <caption>Participant roster</caption>
-          <thead><tr>{selectable && <th scope="col">Attended</th>}<th scope="col">Participant</th><th scope="col">Review status</th></tr></thead>
+          <thead><tr>{selectable && <th scope="col">Attended</th>}<th scope="col">Participant</th><th scope="col">Review status</th><th scope="col">Record</th></tr></thead>
           <tbody>{detail.items.map(row => <tr key={row.bookingId}>
             {selectable && <td>{row.reviewStatus === 'UNSUBMITTED' && row.bookingStatus === 'CONFIRMED' &&
               <input type="checkbox" aria-label={'Mark ' + row.clientDisplayName + ' attended'}
@@ -161,8 +162,12 @@ export function AttendanceWorkspace({ sessionId, coach }: { sessionId: string; c
                   setSelected(current => checked ? [...current, row.bookingId] : current.filter(id => id !== row.bookingId));
                 }} />}</td>}
             <td>{row.clientDisplayName}{row.bookingStatus === 'CANCELLED' && ' · Booking cancelled'}</td>
-            <td>{row.reviewStatus === 'PENDING_REVIEW' ? 'Pending review' : 'Unsubmitted'}
+            <td>{row.reviewStatus === 'RETURNED' ? 'Returned' : row.reviewStatus === 'PENDING_REVIEW' ? 'Pending review' : 'Unsubmitted'}
               {row.submittedAt && <><br /><time dateTime={row.submittedAt}>{dateTime(row.submittedAt)}</time></>}</td>
+            <td>{row.revision > 0 && <button type="button" className="button quiet" disabled={busy}
+              aria-expanded={recordId === row.bookingId} onClick={() => setRecordId(row.bookingId)}>
+              Review {row.clientDisplayName}
+            </button>}</td>
           </tr>)}</tbody>
         </table></div> : <p>No confirmed participants or submitted attendance.</p>}
         {selectable && detail.items.some(row => row.reviewStatus === 'UNSUBMITTED') &&
@@ -171,6 +176,114 @@ export function AttendanceWorkspace({ sessionId, coach }: { sessionId: string; c
       </form>
       {detail.nextCursor && <button className="button secondary" disabled={busy}
         onClick={() => void load(detail.nextCursor!)}>Load more participants</button>}
+      {detail.items.filter(row => row.bookingId === recordId).map(row => <ParticipantReview key={row.bookingId}
+        sessionPath={path} item={row} coach={coach} scheduleRevision={session.revision}
+        enabled={!session.cancelledAt && row.bookingStatus === 'CONFIRMED' && started
+          && (coach ? detail.submissionEnabled : detail.returnEnabled)}
+        onChanged={async message => { setNotice(message); await load(); }} />)}
     </>}
+  </section>;
+}
+
+function ParticipantReview({ sessionPath, item, coach, scheduleRevision, enabled, onChanged }: {
+  sessionPath: string; item: AttendanceItem; coach: boolean; scheduleRevision: number; enabled: boolean;
+  onChanged: (message: string) => Promise<void>;
+}) {
+  const path = sessionPath + '/participants/' + item.bookingId;
+  const [history, setHistory] = useState<AttendanceHistory>();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [reason, setReason] = useState('');
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [retry, setRetry] = useState<CatalogWrite>();
+  const savingNow = useRef(false);
+
+  const load = useCallback(async (after?: string) => {
+    setLoading(true);
+    setError('');
+    if (!after) setAcknowledged(false);
+    try {
+      const page = await get<AttendanceHistory>(pagedPath(path, 50, after));
+      setHistory(current => ({ ...page, items: [...(after ? current?.items ?? [] : []), ...page.items] }));
+    } catch (failure) {
+      setHistory(undefined);
+      setError(requestError(failure));
+    } finally { setLoading(false); }
+  }, [path]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function save(intent: CatalogWrite) {
+    if (savingNow.current) return;
+    savingNow.current = true;
+    setSaving(true);
+    setError('');
+    try {
+      await write(intent);
+      setRetry(undefined);
+      setReason('');
+      await load();
+      await onChanged(coach ? 'Attendance reaffirmed and submitted for review.' : 'Attendance returned to the Coach.');
+    } catch (failure) {
+      if (failure instanceof CatalogError && failure.status >= 500) {
+        setRetry(intent);
+        setError('The result could not be confirmed. Retry the same request.');
+      } else {
+        setRetry(undefined);
+        setHistory(undefined);
+        setAcknowledged(false);
+        setError(requestError(failure));
+      }
+    } finally { savingNow.current = false; setSaving(false); }
+  }
+
+  const latest = history?.items[0];
+  const current = latest?.revision === item.revision;
+  const busy = loading || saving;
+  const pending = current && !latest.reviewDecision && item.reviewStatus === 'PENDING_REVIEW';
+  const returned = current && !!latest.reviewDecision && item.reviewStatus === 'RETURNED';
+
+  return <section aria-label={'Attendance record for ' + item.clientDisplayName} className="panel">
+    <h3>Attendance record · {item.clientDisplayName}</h3>
+    <button className="button quiet" disabled={busy} onClick={() => void load()}>Refresh history</button>
+    {loading && <p role="status">Loading attendance history…</p>}
+    {error && <p role="alert" className="notice error">{error}</p>}
+    {retry && <button className="button primary" disabled={busy} onClick={() => void save(retry)}>Retry review request</button>}
+    {history && (history.items.length ? <ol aria-label="Attendance history">
+      {history.items.map(revision => <li key={revision.id}>
+        <p>Revision {revision.revision} · {revision.submissionKind === 'ORIGINAL' ? 'Original submission' : 'Coach reaffirmation'} · Attended</p>
+        <p>Coach {revision.submittedById} · <time dateTime={revision.submittedAt}>{dateTime(revision.submittedAt)}</time></p>
+        {revision.reviewDecision ? <>
+          <p>Returned by Admin {revision.reviewDecision.adminId} · <time dateTime={revision.reviewDecision.decidedAt}>
+            {dateTime(revision.reviewDecision.decidedAt)}</time></p>
+          <p><strong>Return reason:</strong> {revision.reviewDecision.reason}</p>
+        </> : <p>Pending review</p>}
+      </li>)}
+    </ol> : <p>No attendance history.</p>)}
+    {history?.nextCursor && <button className="button secondary" disabled={busy}
+      onClick={() => void load(history.nextCursor!)}>Load earlier revisions</button>}
+    {!enabled && <p>Attendance changes are currently unavailable for this participant.</p>}
+    {enabled && !coach && pending && <form onSubmit={event => {
+      event.preventDefault();
+      if (!reason.trim() || busy || retry) return;
+      void save(newWrite(path + '/return', { expectedScheduleRevision: scheduleRevision, expectedRevision: item.revision, reason }));
+    }}>
+      <label>Reason for return (attendance only)
+        <textarea required maxLength={1000} value={reason} disabled={busy || !!retry} onChange={event => setReason(event.target.value)} />
+      </label>
+      <button className="button primary" disabled={busy || !!retry || !reason.trim()}>Return to Coach</button>
+    </form>}
+    {enabled && coach && returned && <form onSubmit={event => {
+      event.preventDefault();
+      if (!acknowledged || busy || retry || !latest.reviewDecision) return;
+      void save(newWrite(path + '/reaffirm', { expectedScheduleRevision: scheduleRevision, expectedRevision: item.revision,
+        reviewedReturnId: latest.reviewDecision.id, outcome: 'ATTENDED' }));
+    }}>
+      <p>This reaffirms Attended. Attendance details cannot be edited in this slice.</p>
+      <label><input type="checkbox" checked={acknowledged} disabled={busy || !!retry}
+        onChange={event => setAcknowledged(event.target.checked)} /> I have read the Admin’s return reason and reaffirm Attended.</label>
+      <button className="button primary" disabled={busy || !!retry || !acknowledged}>Reaffirm Attended</button>
+    </form>}
   </section>;
 }

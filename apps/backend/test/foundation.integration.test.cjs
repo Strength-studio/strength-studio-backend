@@ -2961,6 +2961,327 @@ test('attendance survives a waiting booking cancellation and samples the start a
 });
 
 
+const participantPath = f => attendancePath(f.session) + '/participants/' + f.confirmed.id;
+const returnRequest = (f, overrides = {}) => adminWrite({ expectedScheduleRevision: f.session.revision,
+  expectedRevision: 1, reason: 'Please review the completion with this participant.', ...overrides });
+const historyRead = (f, actor = sessions.admin, query = '') => expectStatus(200, participantPath(f) + query, { access: actor.accessToken });
+async function returnedAttendance() {
+  const f = await attendanceFixture();
+  await expectStatus(204, f.path, f.submit());
+  await expectStatus(204, participantPath(f) + '/return', returnRequest(f));
+  const decision = (await historyRead(f)).items[0].reviewDecision;
+  const reaffirmRequest = (overrides = {}) => ({ access: f.actor.accessToken, method: 'POST', key: randomUUID(), body: {
+    expectedScheduleRevision: f.session.revision, expectedRevision: 1, reviewedReturnId: decision.id, outcome: 'ATTENDED', ...overrides,
+  } });
+  return { ...f, decision, reaffirmRequest };
+}
+
+test('Admin return is participant-specific and Coach reaffirmation preserves immutable history and memberships', async () => {
+  const f = await attendanceFixture();
+  const second = await f.book('CONFIRMED', 'other');
+  await expectStatus(204, f.path, f.submit([attended(f.confirmed), attended(second)]));
+  const before = await migrator.attendanceRevision.findMany({ where: { bookingId: { in: [f.confirmed.id, second.id] } }, orderBy: { id: 'asc' } });
+  const memberships = await migrator.membership.findMany({ where: { bookings: { some: { scheduledSessionId: f.session.id } } }, orderBy: { id: 'asc' } });
+  const request = returnRequest(f, { reason: '  Review participant completion.  ' });
+  const response = await requestWithId(participantPath(f) + '/return', request);
+  const history = await historyRead(f, f.actor);
+  const decision = history.items[0].reviewDecision;
+  assert.equal(history.items[0].submissionKind, 'ORIGINAL');
+  assert.equal(decision.reason, 'Review participant completion.');
+  assert.equal(decision.adminId, users.admin.id);
+  const audit = await migrator.auditLog.findFirstOrThrow({ where: { targetId: decision.id, action: 'ATTENDANCE_RETURNED' } });
+  assert.equal(audit.actorId, users.admin.id);
+  assert.equal(audit.requestId, response);
+  const items = (await f.detail(f.actor)).items;
+  assert.equal(items.find(row => row.bookingId === f.confirmed.id).reviewStatus, 'RETURNED');
+  assert.equal(items.find(row => row.bookingId === second.id).reviewStatus, 'PENDING_REVIEW');
+  await expectStatus(204, participantPath(f) + '/return', request);
+  const reaffirm = { access: f.actor.accessToken, method: 'POST', key: randomUUID(), body: {
+    expectedScheduleRevision: f.session.revision, expectedRevision: 1, reviewedReturnId: decision.id, outcome: 'ATTENDED',
+  } };
+  await expectStatus(204, participantPath(f) + '/reaffirm', reaffirm);
+  await expectStatus(204, participantPath(f) + '/reaffirm', { ...reaffirm, body: { ...reaffirm.body, reviewedReturnId: decision.id.toUpperCase() } });
+  const final = await historyRead(f);
+  assert.equal(final.items.length, 2);
+  assert.equal(final.items[0].revision, 2);
+  assert.equal(final.items[0].submissionKind, 'REAFFIRMATION');
+  assert.equal(final.items[0].outcome, 'ATTENDED');
+  assert.equal(final.items[0].submittedById, f.assigned.id);
+  assert.equal(final.items[0].reviewDecision, null);
+  assert.deepEqual(final.items[1], history.items[0]);
+  assert.deepEqual(await migrator.attendanceRevision.findMany({ where: { id: { in: before.map(row => row.id) } }, orderBy: { id: 'asc' } }), before);
+  assert.deepEqual(await migrator.membership.findMany({ where: { id: { in: memberships.map(row => row.id) } }, orderBy: { id: 'asc' } }), memberships);
+  assert.equal((await f.detail(f.actor)).items.find(row => row.bookingId === f.confirmed.id).reviewStatus, 'PENDING_REVIEW');
+  assert.equal(await migrator.attendanceReviewDecision.count({ where: { revisionId: final.items[1].id } }), 1);
+  assert.equal(await migrator.auditLog.count({ where: { action: 'ATTENDANCE_REAFFIRMED', targetId: final.items[0].id } }), 1);
+  const page = await historyRead(f, f.actor, '?limit=1');
+  assert.deepEqual(page.items, [final.items[0]]);
+  assert.equal(page.nextCursor, final.items[0].id);
+  assert.deepEqual((await historyRead(f, f.actor, '?after=' + page.nextCursor)).items, [final.items[1]]);
+  await expectStatus(400, participantPath(f) + '?after=' + before.find(row => row.bookingId === second.id).id, adminRead());
+});
+
+async function requestWithId(path, options) {
+  const response = await request(path, options);
+  assert.equal(response.status, 204, await response.text());
+  return response.headers.get('x-request-id');
+}
+
+test('return validates mandatory reason, exact JSON contract, schedule, revision and idempotency key', async () => {
+  const f = await attendanceFixture();
+  await expectStatus(204, f.path, f.submit());
+  const path = participantPath(f) + '/return';
+  for (const reason of [undefined, null, '', ' \n\t ', '\u00a0', 12, [], {}, 'x'.repeat(1001)]) {
+    await expectStatus(400, path, returnRequest(f, { reason }));
+  }
+  for (const fields of [{ expectedRevision: '1' }, { expectedRevision: 0 }, { expectedScheduleRevision: 0 }, { note: 'not supported' }]) {
+    await expectStatus(400, path, returnRequest(f, fields));
+  }
+  await expectStatus(400, path + '?extra=yes', returnRequest(f));
+  await expectStatus(400, path, { ...returnRequest(f), key: undefined });
+  assert.equal((await expectStatus(409, path, returnRequest(f, { expectedRevision: 2 }))).code, 'ATTENDANCE_REVISION_STALE');
+  assert.equal((await expectStatus(409, path, returnRequest(f, { expectedScheduleRevision: 2 }))).code, 'SCHEDULED_SESSION_CHANGED');
+  assert.equal(await migrator.attendanceReviewDecision.count({ where: { revision: { bookingId: f.confirmed.id } } }), 0);
+});
+
+test('history, return and reaffirmation enforce assigned Coach and Admin roles including legacy grants', async () => {
+  const f = await returnedAttendance();
+  const outsider = await attendanceLogin(f.coachId);
+  for (const actor of [sessions.staff, sessions.client]) {
+    await expectStatus(403, participantPath(f), { access: actor.accessToken });
+    await expectStatus(403, participantPath(f) + '/return', { ...returnRequest(f), access: actor.accessToken });
+    await expectStatus(403, participantPath(f) + '/reaffirm', { ...f.reaffirmRequest(), access: actor.accessToken });
+  }
+  for (const actor of [f.actor, outsider]) {
+    await expectStatus(403, participantPath(f) + '/return', { ...returnRequest(f), access: actor.accessToken });
+  }
+  await expectStatus(403, participantPath(f) + '/reaffirm', { ...f.reaffirmRequest(), access: sessions.admin.accessToken });
+  await expectStatus(404, participantPath(f), { access: outsider.accessToken });
+  await expectStatus(404, participantPath(f) + '/reaffirm', { ...f.reaffirmRequest(), access: outsider.accessToken });
+  await expectStatus(404, attendancePath(f.session) + '/participants/' + randomUUID(), adminRead());
+  assert.equal((await historyRead(f, f.actor)).items[0].reviewDecision.reason, f.decision.reason);
+  await migrator.scheduledSession.update({ where: { id: f.session.id }, data: { coachId: f.coachId } });
+  for (const actor of [f.actor, outsider]) {
+    await expectStatus(404, participantPath(f), { access: actor.accessToken });
+    await expectStatus(404, participantPath(f) + '/reaffirm', { ...f.reaffirmRequest(), access: actor.accessToken });
+  }
+  assert.equal((await historyRead(f)).items.length, 1);
+});
+
+test('reaffirmation requires the latest returned revision and acknowledgment of its exact reason', async () => {
+  const f = await returnedAttendance();
+  const path = participantPath(f) + '/reaffirm';
+  assert.equal((await expectStatus(409, participantPath(f) + '/return', returnRequest(f))).code, 'ATTENDANCE_STATE_CONFLICT');
+  for (const fields of [{ outcome: 'NO_SHOW' }, { outcome: 'LATE_CANCELLED' }, { reviewedReturnId: undefined }, { note: 'no fields' }]) {
+    await expectStatus(400, path, f.reaffirmRequest(fields));
+  }
+  assert.equal((await expectStatus(409, path, f.reaffirmRequest({ reviewedReturnId: randomUUID() }))).code, 'ATTENDANCE_RETURN_STALE');
+  assert.equal((await expectStatus(409, path, f.reaffirmRequest({ expectedRevision: 2 }))).code, 'ATTENDANCE_REVISION_STALE');
+  const reaffirm = f.reaffirmRequest();
+  await expectStatus(204, path, reaffirm);
+  assert.equal((await expectStatus(409, path, { ...reaffirm, body: { ...reaffirm.body, expectedRevision: 2 } })).code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.equal((await expectStatus(409, path, f.reaffirmRequest())).code, 'ATTENDANCE_REVISION_STALE');
+  assert.equal((await expectStatus(409, path, f.reaffirmRequest({ expectedRevision: 2 }))).code, 'ATTENDANCE_STATE_CONFLICT');
+  assert.equal((await expectStatus(409, participantPath(f) + '/return', returnRequest(f))).code, 'ATTENDANCE_REVISION_STALE');
+  await expectStatus(204, participantPath(f) + '/return', returnRequest(f, { expectedRevision: 2, reason: 'Review again.' }));
+  assert.equal((await expectStatus(409, path, f.reaffirmRequest({ expectedRevision: 2 }))).code, 'ATTENDANCE_RETURN_STALE');
+  const latest = (await historyRead(f)).items[0];
+  await expectStatus(204, path, f.reaffirmRequest({ expectedRevision: 2, reviewedReturnId: latest.reviewDecision.id }));
+  assert.deepEqual((await historyRead(f)).items.map(row => [row.revision, row.submissionKind]), [[3, 'REAFFIRMATION'], [2, 'REAFFIRMATION'], [1, 'ORIGINAL']]);
+  const fresh = await attendanceFixture();
+  await expectStatus(409, participantPath(fresh) + '/reaffirm', { ...f.reaffirmRequest(), access: fresh.actor.accessToken,
+    body: { ...f.reaffirmRequest().body, expectedScheduleRevision: fresh.session.revision } });
+  await expectStatus(204, fresh.path, fresh.submit());
+  assert.equal((await expectStatus(409, participantPath(fresh) + '/reaffirm', { ...f.reaffirmRequest(), access: fresh.actor.accessToken })).code,
+    'ATTENDANCE_STATE_CONFLICT');
+});
+
+test('return and reaffirmation remain production-gated and audit failure rolls back evidence and retries', async () => {
+  const f = await attendanceFixture();
+  await expectStatus(204, f.path, f.submit());
+  const config = app.get(CONFIG);
+  const path = participantPath(f);
+  delete config.attendanceCaptureForTesting;
+  try {
+    assert.equal((await f.detail(sessions.admin)).returnEnabled, false);
+    assert.equal((await expectStatus(409, path + '/return', returnRequest(f))).code, 'WORKFLOW_NOT_ENABLED');
+  } finally { config.attendanceCaptureForTesting = true; }
+  const returnIntent = returnRequest(f);
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_return CHECK (action <> 'ATTENDANCE_RETURNED') NOT VALID`;
+  try {
+    await expectStatus(500, path + '/return', returnIntent);
+    assert.equal(await migrator.attendanceReviewDecision.count({ where: { revision: { bookingId: f.confirmed.id } } }), 0);
+    assert.equal(await migrator.idempotencyKey.count({ where: { key: returnIntent.key } }), 0);
+  } finally { await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_return`; }
+  await expectStatus(204, path + '/return', returnIntent);
+  const decision = (await historyRead(f)).items[0].reviewDecision;
+  const reaffirm = { ...f.submit(), body: { expectedScheduleRevision: f.session.revision, expectedRevision: 1,
+    reviewedReturnId: decision.id, outcome: 'ATTENDED' } };
+  delete config.attendanceCaptureForTesting;
+  try {
+    assert.equal((await expectStatus(409, path + '/reaffirm', reaffirm)).code, 'WORKFLOW_NOT_ENABLED');
+  } finally { config.attendanceCaptureForTesting = true; }
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT test_reject_reaffirm CHECK (action <> 'ATTENDANCE_REAFFIRMED') NOT VALID`;
+  try {
+    await expectStatus(500, path + '/reaffirm', reaffirm);
+    assert.equal(await migrator.attendanceRevision.count({ where: { bookingId: f.confirmed.id } }), 1);
+    assert.equal(await migrator.idempotencyKey.count({ where: { key: reaffirm.key } }), 0);
+  } finally { await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT test_reject_reaffirm`; }
+  await expectStatus(204, path + '/reaffirm', reaffirm);
+});
+
+test('concurrent returns, reaffirmations and retries serialize without duplicate evidence', async () => {
+  const f = await attendanceFixture();
+  await expectStatus(204, f.path, f.submit());
+  const path = participantPath(f);
+  const returns = await Promise.all([request(path + '/return', returnRequest(f)),
+    request(path + '/return', { ...returnRequest(f), access: sessions.raceAdmin.accessToken })]);
+  assert.deepEqual(returns.map(row => row.status).sort(), [204, 409]);
+  const revision = (await historyRead(f)).items[0];
+  const reaffirm = { ...f.submit(), body: { expectedScheduleRevision: f.session.revision,
+    expectedRevision: 1, reviewedReturnId: revision.reviewDecision.id, outcome: 'ATTENDED' } };
+  const attempts = await Promise.all([request(path + '/reaffirm', reaffirm), request(path + '/reaffirm', reaffirm),
+    request(path + '/reaffirm', { ...reaffirm, key: randomUUID() }), request(path + '/return', returnRequest(f))]);
+  assert.deepEqual(attempts.map(row => row.status).sort(), [204, 204, 409, 409]);
+  assert.equal(await migrator.attendanceRevision.count({ where: { bookingId: f.confirmed.id } }), 2);
+  assert.equal(await migrator.attendanceReviewDecision.count({ where: { revisionId: revision.id } }), 1);
+  const latest = (await historyRead(f)).items[0];
+  assert.equal(latest.revision, 2);
+  assert.equal(latest.reviewDecision, null);
+});
+
+for (const cancelled of ['booking', 'session']) {
+  for (const transition of ['return', 'reaffirm']) {
+    test('a cancelled ' + cancelled + ' blocks ' + transition + ' and preserves all evidence', async () => {
+      const f = transition === 'reaffirm' ? await returnedAttendance() : await attendanceFixture();
+      if (transition === 'return') await expectStatus(204, f.path, f.submit());
+      const before = await historyRead(f);
+      if (cancelled === 'booking') {
+        await expectStatus(204, bookingDecision(f.confirmed.id, 'cancel'), adminWrite({ reason: 'Cancelled after submission.' }));
+      } else {
+        // The Scheduling API already denies cancellation after start. Simulate an externally cancelled historical session.
+        await migrator.scheduledSession.update({ where: { id: f.session.id }, data: {
+          cancelledAt: new Date(), cancellationReason: 'Historical cancellation fixture.',
+        } });
+      }
+      const result = await expectStatus(409, participantPath(f) + '/' + transition,
+        transition === 'return' ? returnRequest(f) : f.reaffirmRequest());
+      assert.equal(result.code, cancelled === 'booking' ? 'BOOKING_NOT_CONFIRMED' : 'SESSION_CANCELLED');
+      assert.deepEqual(await historyRead(f, f.actor), before);
+    });
+  }
+}
+
+for (const transition of ['return', 'reaffirm']) {
+  test(transition + ' re-reads a winning Booking cancellation after acquiring the session lock', async () => {
+    const f = transition === 'reaffirm' ? await returnedAttendance() : await attendanceFixture();
+    if (transition === 'return') await expectStatus(204, f.path, f.submit());
+    const before = await historyRead(f);
+    let cancellation, review;
+    try {
+      await migrator.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM scheduled_session WHERE id = ${f.session.id}::uuid FOR UPDATE`;
+        cancellation = expectStatus(204, bookingDecision(f.confirmed.id, 'cancel'), adminWrite({ reason: 'Cancellation won.' }));
+        await waitForBookingLock('FROM scheduled_session WHERE id', 1);
+        review = expectStatus(409, participantPath(f) + '/' + transition, transition === 'return' ? returnRequest(f) : f.reaffirmRequest());
+        await waitForBookingLock('FROM scheduled_session WHERE id', 2);
+      });
+    } finally { await Promise.all([cancellation, review]); }
+    assert.equal((await review).code, 'BOOKING_NOT_CONFIRMED');
+    assert.deepEqual(await historyRead(f), before);
+  });
+}
+
+test('review decisions enforce append-only runtime permissions, uniqueness, reason and restrictive references', async () => {
+  const f = await returnedAttendance();
+  const decision = await migrator.attendanceReviewDecision.findUniqueOrThrow({ where: { id: f.decision.id } });
+  await assert.rejects(runtime.attendanceReviewDecision.update({ where: { id: decision.id }, data: { reason: 'Rewrite' } }));
+  await assert.rejects(runtime.attendanceReviewDecision.delete({ where: { id: decision.id } }));
+  const { id, ...data } = decision;
+  await assert.rejects(runtime.attendanceReviewDecision.create({ data }), { code: 'P2002' });
+  await assert.rejects(runtime.attendanceReviewDecision.create({ data: { ...data, revisionId: randomUUID() } }), { code: 'P2003' });
+  const other = await attendanceFixture();
+  await expectStatus(204, other.path, other.submit());
+  const otherRevision = (await historyRead(other)).items[0];
+  await assert.rejects(runtime.attendanceReviewDecision.create({ data: { ...data, revisionId: otherRevision.id, adminId: randomUUID() } }), { code: 'P2003' });
+  for (const reason of ['', ' \n\t ', 'x'.repeat(1001)]) {
+    await assert.rejects(runtime.attendanceReviewDecision.create({ data: { ...data, revisionId: otherRevision.id, reason } }));
+  }
+  await assert.rejects(migrator.attendanceRevision.delete({ where: { id: decision.revisionId } }), { code: 'P2003' });
+  for (const role of ['studio_reporting', 'studio_worker']) {
+    await assert.rejects(migrator.$transaction(async tx => {
+      await tx.$executeRawUnsafe('SET LOCAL ROLE ' + role);
+      await tx.$queryRaw`SELECT id FROM attendance_review_decision`;
+    }));
+  }
+  assert.deepEqual(await migrator.attendanceReviewDecision.findUniqueOrThrow({ where: { id } }), decision);
+});
+
+test('return migration upgrades the merged attendance baseline without changing original submissions', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'studio-attendance-return-upgrade-'));
+  const upgradeName = 'studio_attendance_upgrade_' + randomBytes(6).toString('hex');
+  const { api, migration } = disposableUrls();
+  api.pathname = migration.pathname = '/' + upgradeName;
+  const schema = join(scratch, 'schema.prisma');
+  const migrations = join(prismaDirectory, 'migrations');
+  const copy = name => cpSync(join(migrations, name), join(scratch, 'migrations', name), { recursive: true });
+  let db, databaseCreated = false;
+  try {
+    cpSync(join(prismaDirectory, 'schema.prisma'), schema);
+    mkdirSync(join(scratch, 'migrations'));
+    for (const name of readdirSync(migrations)) {
+      if (name <= '20261117000100_attendance_submission' || name === 'migration_lock.toml') copy(name);
+    }
+    await owner.$executeRawUnsafe(`CREATE DATABASE "${upgradeName}"`);
+    databaseCreated = true;
+    deployMigrations(api, migration, schema);
+    db = new PrismaClient({ datasourceUrl: migration.href });
+    const admin = await db.user.create({ data: { normalizedEmail: 'attendance-upgrade-admin@example.invalid', role: 'ADMIN', accountState: 'ACTIVE' } });
+    const client = await db.clientProfile.create({ data: { displayName: 'Upgrade participant', user: { create: {
+      normalizedEmail: 'attendance-upgrade-client@example.invalid', role: 'CLIENT', accountState: 'ACTIVE',
+    } } } });
+    const coach = await db.coachProfile.create({ data: { displayName: 'Upgrade coach', user: { create: {
+      normalizedEmail: 'attendance-upgrade-coach@example.invalid', role: 'COACH', accountState: 'ACTIVE',
+    } } } });
+    const type = await db.sessionType.create({ data: { code: 'ATTENDANCE-UPGRADE', name: 'Upgrade attendance', mode: 'GROUP' } });
+    const membership = await bookingMembership(db, admin.id, client.userId, type.id);
+    const startsAt = new Date(Date.now() - 3600_000);
+    const session = await db.scheduledSession.create({ data: {
+      sessionTypeId: type.id, coachId: coach.userId, startsAt, endsAt: new Date(+startsAt + 1800_000), bufferMinutes: 0, capacity: 2,
+    } });
+    const booking = await db.booking.create({ data: {
+      clientId: client.userId, membershipId: membership.id, scheduledSessionId: session.id, status: 'CONFIRMED',
+    } });
+    const attendance = await db.sessionAttendance.create({ data: {
+      scheduledSessionId: session.id, servedCoachId: coach.userId, servedStartsAt: startsAt, servedSessionTypeId: type.id,
+    } });
+    const participant = await db.attendanceParticipant.create({ data: { bookingId: booking.id, scheduledSessionId: session.id } });
+    const revision = await db.attendanceRevision.create({ data: {
+      bookingId: booking.id, revision: 1, outcome: 'ATTENDED', submittedById: coach.userId, submittedAt: startsAt,
+    } });
+    const [baseline] = await db.$queryRaw`SELECT to_regclass('public.attendance_review_decision')::text AS review`;
+    assert.equal(baseline.review, null);
+    copy('20261123000100_attendance_return_reaffirmation');
+    deployMigrations(api, migration, schema);
+    deployMigrations(api, migration, schema);
+    assert.deepEqual(await db.attendanceRevision.findUniqueOrThrow({ where: { id: revision.id } }), revision);
+    assert.deepEqual(await db.attendanceParticipant.findUniqueOrThrow({ where: { bookingId: booking.id } }), participant);
+    assert.deepEqual(await db.sessionAttendance.findUniqueOrThrow({ where: { scheduledSessionId: session.id } }), attendance);
+    assert.deepEqual(await db.membership.findUniqueOrThrow({ where: { id: membership.id } }), membership);
+    assert.deepEqual(await db.booking.findUniqueOrThrow({ where: { id: booking.id } }), booking);
+    assert.equal(await db.attendanceReviewDecision.count(), 0);
+    const [{ canInsert, canUpdate, canDelete }] = await db.$queryRaw`SELECT
+      has_table_privilege('studio_api', 'attendance_review_decision', 'INSERT') AS "canInsert",
+      has_table_privilege('studio_api', 'attendance_review_decision', 'UPDATE') AS "canUpdate",
+      has_table_privilege('studio_api', 'attendance_review_decision', 'DELETE') AS "canDelete"`;
+    assert.deepEqual({ canInsert, canUpdate, canDelete }, { canInsert: true, canUpdate: false, canDelete: false });
+  } finally {
+    await db?.$disconnect();
+    if (databaseCreated) await owner.$executeRawUnsafe(`DROP DATABASE "${upgradeName}" WITH (FORCE)`);
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
   const ticket = (await expectStatus(200, '/auth/socket-ticket', { method: 'POST', access: sessions.staff.accessToken })).ticket;
   const wrongOrigin = await fetch(base + '/socket.io/?EIO=4&transport=polling', { headers: { origin: 'https://untrusted.example' } });

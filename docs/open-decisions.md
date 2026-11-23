@@ -1,6 +1,6 @@
 # Studio decision index
 
-Updated 10 November 2026 against Foundation and both owner decision briefs. Status applies to business policy. Implementation, rollout and effective policy revisions are tracked separately. An unresolved part of an approved decision still gates the affected behavior.
+Updated 23 November 2026 for the owner-approved attendance reaffirmation slice; other entries retain their existing decision-brief status. Status applies to business policy. Implementation, rollout and effective policy revisions are tracked separately. An unresolved part of an approved decision still gates the affected behavior.
 
 | ID | Status | Scope and remaining dependencies |
 |---|---|---|
@@ -12,7 +12,7 @@ Updated 10 November 2026 against Foundation and both owner decision briefs. Stat
 | [O-06](milestone-2-decision-register.md#o-06) | Approved core policy | Dedicated private management permission, own-client visibility, optional Riyadh expiry, version history, supersession and reasoned Admin withdrawal. Staff withdrawal scope and private-offer reuse need clarification. |
 | [O-07](milestone-2-decision-register.md#o-07) | Approved | Admin activation date or future Riyadh start, explicit extension, no automatic grace, scheduled/open-ended suspension, unused-session expiry and independent termination. Transition contracts and later O-08 booking effects remain. |
 | [O-08](milestone-2-decision-register.md#o-08) | Approved in part | Slice 1 coach-buffer rules are approved. Holds, client limits, replacement and affected bookings remain unresolved. Waitlist deferred pending launch scope and ordering. Milestone 3. |
-| [O-09](milestone-2-decision-register.md#o-09) | Unresolved | Late attendance, chargeability, insufficient units and correction recipients. Admin verification and deduction boundary stays approved. Milestone 3. |
+| [O-09](milestone-2-decision-register.md#o-09) | Approved limited reaffirmation; exceptions unresolved | Coach may reaffirm ATTENDED after reviewing an Admin return reason; no editable details or alternative outcomes. Admin verification/deduction boundary stays approved and production capture stays gated. [O-09-A–G](milestone-3-attendance-return-reaffirmation.md#o-09-and-unresolved-decisions) retain deadlines, chargeability, insufficiency, notifications, post-submission cancellation, full correction and retention questions. |
 | [O-10](milestone-2-decision-register.md#o-10) | Unresolved | Manual commission recipients and distribution rules. Access remains strictly Admin-only. Automatic calculation deferred. |
 | [O-11](milestone-2-decision-register.md#o-11) | Approved in part | In-app/email, Hostinger SMTP, bilingual messages and Admin reminder controls. Push/SMS deferred. Category defaults, sender/domain, infrastructure access and measured launch targets remain open. |
 | [O-12](milestone-2-decision-register.md#o-12) | Approved in part | Daily encrypted PostgreSQL backups, off-VPS copy, 30 daily/12 weekly/12 monthly retention, 24-hour maximum RPO and 8-hour RTO target. Provider, custody, alert assignment and restore-drill cadence remain open. |

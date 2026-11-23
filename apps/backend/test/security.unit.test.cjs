@@ -103,3 +103,15 @@ test('booking actions remain Admin-only even with stored Staff grants', () => {
     assert.equal(staffPermissions.has(action), false);
   }
 });
+
+test('attendance return and reaffirmation have separate role boundaries and ignore legacy Staff grants', () => {
+  for (const role of Object.values(Role)) {
+    const grants = Object.values(StaffPermission);
+    assert.equal(hasAction(role, grants, 'attendance.return'), role === Role.ADMIN);
+    assert.equal(hasAction(role, grants, 'attendance.reaffirm'), role === Role.COACH);
+    assert.equal(hasAction(role, grants, 'attendance.read'), role === Role.ADMIN || role === Role.COACH);
+  }
+  assert.equal(staffPermissions.has('attendance.read'), false);
+  assert.equal(staffPermissions.has('attendance.return'), false);
+  assert.equal(staffPermissions.has('attendance.reaffirm'), false);
+});

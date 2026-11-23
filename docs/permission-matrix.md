@@ -42,7 +42,9 @@ This is the canonical action and resource map for the [API contract](api-contrac
 | `booking.approve`, `booking.cancel.decide`, `booking.reschedule.decide` | Yes | Same named grants, independently | No | No |
 | `booking.waitlist.promote` | If enabled | Same named grant if enabled | No | No |
 | `attendance.submit` | No | No | Explicit confirmed participants in an assigned session, subject to the submission gate | No |
-| `attendance.read` | Read-only roster and review | No | Assigned roster and own served history only | No |
+| `attendance.read` | Roster and immutable participant/review history | No | Assigned roster and own served history only | No |
+| `attendance.return` | Return latest pending participant revision with a mandatory reason; gated | No | No | No |
+| `attendance.reaffirm` | No | No | Reaffirm ATTENDED after acknowledging the latest returned revision’s reason; gated | No |
 | `attendance.verify`, `attendance.correct` (deferred) | Admin only when implemented | No | No | No |
 | `report.read`, `report.export`, `audit.read` | Yes | Same named grants, independently | Own permitted operational report reads only | Own permitted report reads only |
 | `commission.read`, `commission.record`, `commission.distribute`, `commission.export`, `commission.audit` | **Admin only** | **Denied with all grants** | **Denied** | **Denied** |
@@ -50,6 +52,8 @@ This is the canonical action and resource map for the [API contract](api-contrac
 Booking Management Slice 1 enables `booking.read`, `booking.assist`, `booking.approve`, and `booking.cancel.decide` for Admin only. Approval and rejection share `booking.approve`. Staff booking grants remain dormant, including existing stored grants. The booking rows above describe the broader role design for future slices.
 
 Attendance Slice 1 retains the legacy `ATTENDANCE_READ` enum for stored grants. Those grants confer no access and the Staff grant writer rejects new assignments.
+
+The return/reaffirmation slice preserves those exclusions and frozen served-Coach scope. See the [implemented contract](milestone-3-attendance-return-reaffirmation.md#implemented-contract).
 
 Booking requests include cancellation and reschedule requests, not their approval. Waitlist join and withdrawal use the same own-request scope if enabled. Operational exports require both the relevant read and export permissions. Operational audit access never includes private commission audit.
 
