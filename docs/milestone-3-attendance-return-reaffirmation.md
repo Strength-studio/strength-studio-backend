@@ -6,7 +6,38 @@ On 23 November 2026, `git fetch origin` confirmed remote `main` at
 `55e442bfe06a1efe6e7a421e4119a28108d9f442`, matching the supplied merged baseline.
 Both existing worktrees were clean and preserved. Work uses branch
 `codex/m3-s1-attendance-corrections` in the separate `Strength Studio M3-S1-PR2`
-worktree. No commit, push, PR, merge, production migration or deployment is authorized.
+worktree. The original implementation task did not authorize commit, push, PR,
+merge, production migration or deployment. The publication evidence below was
+verified separately after that local implementation was delivered.
+
+## Published implementation and CI evidence
+
+The implementation was subsequently published as
+`62f8043433bcda4789efc879f4da9d8f94aafac5` (parent
+`55e442bfe06a1efe6e7a421e4119a28108d9f442`), subject
+`feat: implement attendance return and Coach reaffirmation workflow`.
+Commit metadata names `kraken15th` as author/committer and is dated 23 November 2026
+at 18:41:15 Africa/Cairo. A fresh fetch confirmed this exact SHA on remote `main`;
+the push-triggered CI run below supplies separate remote-publication evidence.
+No PR or review record is asserted by this document.
+
+[Foundation run 45219323033](https://github.com/Strength-studio/strength-studio-backend/actions/runs/45219323033),
+attempt 1, was triggered by a push to `main` at that exact SHA. Its
+[verify job](https://github.com/Strength-studio/strength-studio-backend/actions/runs/45219323033/job/137848960225)
+completed successfully on 23 November 2026 (18:41:28–18:42:24 Africa/Cairo).
+The job log records Node 22.23.5, pnpm 10.34.9, the
+`postgres:17.10-bookworm` image, frozen dependency installation, disposable database
+setup/migrations, `pnpm verify` (11 unit / 99 backend integration tests), OpenAPI
+snapshot comparison and database cleanup, all successful. That workflow does not
+run the separate dashboard integration/browser suites or deploy the application.
+
+The original local verification record below remains evidence for the earlier
+Node 20 / pnpm 11 / PostgreSQL 16 run; it is distinct from the published CI run.
+Subsequent synchronization, parity/reliability investigations and milestone
+planning are tracked in the [next-milestone technical report](milestone-3-technical-readiness.md).
+Local `main` was safely fast-forwarded to the published SHA after publication;
+the historical worktrees and branches were preserved. No production migration,
+deployment or capture activation was performed by this work.
 
 Discovery inspected the merged Prisma schema/migration, attendance DTOs,
 controller/service/tests, action map, audit writer/vocabulary, `Commands.run`,
@@ -113,6 +144,12 @@ These questions preserve the approved verification/deduction boundary in the
 [owner register](milestone-2-decision-register.md#o-09). Recommendations are technical
 defaults only and are not owner-approved business policy.
 
+The subsequent [O-09 owner workshop brief](milestone-3-o09-owner-decision-brief.md)
+offers specific options for A–G; every approval remains pending. It supplements
+this issue list without changing the implemented reaffirmation contract or the
+approved owner register. The [next-slice roadmap](milestone-3-next-slices.md) also
+separates future ledger/verification design approval from implementation authority.
+
 | ID | Exact owner question | Affected workflow | Implementation impact | Blocking point | Recommendation, if technically justified |
 |---|---|---|---|---|---|
 | O-09-A | What is the late attendance submission deadline, including reaffirmation? | Coach first submission and return cycle | A deadline and post-lock validation need an approved policy. | Production capture activation; not gated disposable tests | Keep the existing production gate closed until approved. |
@@ -129,7 +166,7 @@ schema with original submissions present. Database owners remain able to adminis
 tables; append-only permissions apply to application/runtime roles, as in the
 existing attendance design.
 
-## Verification record
+## Original local verification record
 
 The final run used Node 20.19.5, the available pnpm 11.25.0 runner and an isolated
 PostgreSQL 16.15 server on loopback port 55427. No existing database was reachable
@@ -194,7 +231,7 @@ docs/permission-matrix.md
 packages/api-contract/openapi.json
 ```
 
-### Delivery status and limits
+### Original local delivery status and limits
 
 | Category | Result |
 |---|---|
@@ -204,5 +241,9 @@ packages/api-contract/openapi.json
 | Requires owner decision | O-09-A–G above. Reaffirmation itself was explicitly authorized and is no longer a missing-contract blocker. |
 | Blocks production activation | O-09-A remains unresolved and `attendanceCaptureForTesting` remains the only capture enablement. Production activation/deployment is not authorized. Future cancelled-record transitions require O-09-E; future verification/deduction requires the relevant O-09-B/C policies. |
 
-HEAD remains the baseline SHA above: **no commit was created, pushed or merged,
-and no PR was opened. No production migration or deployment occurred.**
+At original local delivery, HEAD was the pre-implementation baseline and the
+changes were uncommitted. The later published implementation is commit
+`62f8043433bcda4789efc879f4da9d8f94aafac5`, with CI evidence above. This historical
+local verification record is not a claim that current remote `main` remains at
+the earlier SHA. **No production migration or deployment occurred during the
+implementation or subsequent technical follow-up.**

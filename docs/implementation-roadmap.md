@@ -2,6 +2,13 @@
 
 Milestone 0 ended with the documentation corrections. The owner subsequently authorized Milestone 1 Foundation. Initial production go-live remains pending under O-14.
 
+For the source-inspected status at commit `62f8043` and the proposed next complete
+business journeys, use the [23 November application inventory and vertical slices](milestone-3-next-slices.md).
+The table below remains the broader milestone sequence, not a claim that every
+listed capability is already implemented. The [current technical report](milestone-3-technical-readiness.md)
+and [pending O-09 owner brief](milestone-3-o09-owner-decision-brief.md) separate
+verification evidence, outstanding decisions and future implementation authority.
+
 | Order | Deliverable | Exit gate |
 |---|---|---|
 | 0. Architecture review | Review the documents and audit corrections. | A01–A06 are addressed in documentation. The owner authorized Foundation. |

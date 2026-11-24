@@ -46,6 +46,12 @@ Clients may hold several active memberships with independent validity, units, fu
 
 ## Scheduling and attendance
 
+The [O-09 owner brief](milestone-3-o09-owner-decision-brief.md) contains pending
+recommendations, not effective rules. No proposed deadline, new outcome,
+chargeability, exception, notification or retention choice changes this table.
+The existing production capture gate and approved ATTENDED reaffirmation boundary
+remain in force until the corresponding owner decision and implementation review.
+
 | Transition | Effect |
 |---|---|
 | Specific request → HELD | Under the slot lock, count confirmed seats and unexpired holds, then acquire a temporary seat. Alternative-time requests can remain AWAITING_SLOT with no seat. |

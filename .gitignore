@@ -8,3 +8,17 @@ coverage/
 *.tsbuildinfo
 
 apps/dashboard/next-env.d.ts
+
+# Local logs, operating-system metadata, temporary files and private storage.
+*.log
+.DS_Store
+Thumbs.db
+/tmp/
+/.tmp/
+/.cache/
+/.local/
+/pgdata/
+/.postgres/
+/postgres-data/
+/credentials/
+/secrets/

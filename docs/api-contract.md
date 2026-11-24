@@ -140,6 +140,13 @@ All writes require `Idempotency-Key`. Successful retries use the original respon
 
 ## Implemented attendance submission slice
 
+The [O-09 owner brief](milestone-3-o09-owner-decision-brief.md) and
+[next-slice roadmap](milestone-3-next-slices.md) are proposals only. They introduce
+no route, DTO, status, outcome, deadline or entitlement behavior into this
+implemented contract. Verification/debit APIs require separate policy/design
+approval and implementation authorization. The published OpenAPI snapshot remains
+the executable contract for the current gated implementation.
+
 The attendance workspace reuses `GET /scheduling/my-sessions` for a Coach's schedule. The dashboard relay allowlists the Coach's date window and pagination filters. It obtains the Coach identity from the authenticated session.
 
 - `GET /attendance/sessions/{sessionId}` uses `attendance.read` for Admin and the assigned Coach. It returns `{ session, serverTime, submissionEnabled, items, nextCursor }`. The session includes its revision, schedule and cancellation state, and the frozen Coach, start and session type after the first submission. Each item has a Booking ID, participant display name, Booking status, revision number, outcome, submitted time and review status. Current confirmed participants without a submission have revision 0 and status `UNSUBMITTED`. Submitted participants have status `PENDING_REVIEW`, including after Booking cancellation. A cancelled session exposes only previously submitted history. The response omits Membership and financial data. Use `limit` (default 50, range 1–100) and an optional visible Booking UUID `after` for pagination.

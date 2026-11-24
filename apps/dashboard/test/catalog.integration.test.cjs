@@ -437,9 +437,22 @@ test('Client browser history preserves authorized Catalog, directory, and detail
     await traverseHistory(t, browser, 'Forward', '/', signOutButton);
 
     await traverseHistory(t, browser, 'Back', detailPath, clientVisible);
-    await browser.evaluate(`document.querySelector('nav a[href="/"]').click(); true`);
+    // BFCache revalidation renders Client HTML before hydration. This scenario
+    // exercises Next.js navigation with retained route data, so wait for the
+    // boundary's layout effect before clicking the client-side link.
+    await browser.until("document.documentElement.hasAttribute('data-client-history')", 'hydrated Client history boundary');
+    const leavingClient = await browser.evaluate(`(() => {
+      const state = { documentId: performance.timeOrigin, path: location.pathname, ready: document.readyState,
+        marked: document.documentElement.hasAttribute('data-client-history'),
+        workspace: !!document.querySelector('[data-client-workspace]') };
+      document.querySelector('nav a[href="/"]').click();
+      return state;
+    })()`);
     await browser.until(signOutButton, 'Catalog after leaving the Client workspace');
-    assert.equal(await browser.evaluate("document.documentElement.hasAttribute('data-client-history')"), true);
+    const catalogState = await browser.evaluate(`({ documentId: performance.timeOrigin, path: location.pathname,
+      marked: document.documentElement.hasAttribute('data-client-history') })`);
+    assert.equal(catalogState.documentId, leavingClient.documentId, 'Expected a Next.js route transition after Client revalidation');
+    assert.equal(catalogState.marked, true, JSON.stringify({ leavingClient, catalogState }));
     await browser.go('/clients');
     await browser.until(`location.pathname === '/clients' && document.readyState === 'complete'
       && (${clientVisible})`, 'separate Client directory document');

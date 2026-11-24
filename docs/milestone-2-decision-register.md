@@ -91,6 +91,8 @@ Scheduled-session cancellation preserves booking records and releases occupancy 
 
 **Open subdecisions.** O-09-A (late submission deadline), O-09-B (no-show/late-cancellation chargeability), O-09-C (insufficient entitlement), O-09-D (notification recipients), and O-09-E (Booking cancellation after submission) remain unresolved. O-09-F tracks future full correction data/outcomes; O-09-G tracks history retention/archival. The [attendance return/reaffirmation register](milestone-3-attendance-return-reaffirmation.md#o-09-and-unresolved-decisions) records each exact question, workflow, implementation impact, blocking point and explicitly labeled technical recommendation. Cancelled-record transitions are blocked while evidence remains readable; this does not settle O-09-E.
 
+**Pending workshop, 23 November 2026.** The [owner decision brief](milestone-3-o09-owner-decision-brief.md) records current behavior, exact approval questions, recommended options, alternatives, tradeoffs, affected components and gates for A–G. All seven answers remain pending. In particular, its proposed 24-hour/48-hour windows, absence/cancellation non-chargeability, service-time eligibility, delivery and archival options are not approved policy. Explicit owner responses must be recorded here and linked to the brief before dependent implementation. The [proposed ledger design](milestone-3-next-slices.md#entitlement-design-review-required-before-s5) also requires separate review/approval before deduction.
+
 ## O-10
 
 **Unresolved — commission distribution.** Commission data remains strictly Admin-only, including when the Coach is the recipient. Automatic calculation is deferred.
