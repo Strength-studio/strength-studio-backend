@@ -1625,6 +1625,76 @@
         ]
       }
     },
+    "/api/v1/purchases/{purchaseId}/audit": {
+      "get": {
+        "description": "Requires purchase.funding.read and audit.read. Returns paginated, scoped purchase, allocated-payment, allocation and Membership audit events.",
+        "operationId": "PurchaseFundingController_audit",
+        "parameters": [
+          {
+            "name": "purchaseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseAuditPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid purchase ID"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "Purchase not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read audit history for a Purchase and its funding records",
+        "tags": [
+          "Purchase funding"
+        ]
+      }
+    },
     "/api/v1/purchases/{purchaseId}/membership": {
       "get": {
         "description": "Admin only. Reads the membership linked to this purchase.",
@@ -3799,6 +3869,73 @@
           "allocatedAmount",
           "remainingAmount",
           "fundingStatus"
+        ]
+      },
+      "PurchaseAuditEventDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actorId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "action": {
+            "type": "string"
+          },
+          "targetType": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "actorId",
+          "action",
+          "targetType",
+          "targetId",
+          "requestId",
+          "reason"
+        ]
+      },
+      "PurchaseAuditPageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PurchaseAuditEventDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
         ]
       },
       "MembershipActivationStateDto": {

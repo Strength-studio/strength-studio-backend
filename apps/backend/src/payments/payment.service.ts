@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AuditAction, AuditTarget, PaymentStatus, Prisma, Role } from '@prisma/client';
+import { AuditAction, AuditTarget, PaymentStatus, Prisma, PurchaseType, Role } from '@prisma/client';
 import { AccessContext, Sessions } from '../identity/session.service';
 import { audit } from '../platform/audit';
 import { Commands } from '../platform/commands';
@@ -94,7 +94,30 @@ export class PaymentService {
     const outcome = await this.commands.run({
       access, action, key, args: [paymentId, purchaseId, amount],
       write: async tx => {
-        // The insert trigger locks the payment and checks eligibility and remaining funds.
+        // Lock receipt before purchase, matching the allocation trigger and activation's purchase lock.
+        const [receipt] = await tx.$queryRaw<{ clientId: string; status: PaymentStatus; amount: Prisma.Decimal }[]>`
+          SELECT client_id AS "clientId", status, amount FROM payment WHERE id = ${paymentId}::uuid FOR NO KEY UPDATE`;
+        if (!receipt) throw failure(404, 'PAYMENT_NOT_FOUND');
+        if (receipt.status !== PaymentStatus.VERIFIED) throw failure(409, 'PAYMENT_NOT_VERIFIED');
+        const [{ locked }] = await tx.$queryRaw<{ locked: boolean }[]>`
+          SELECT public.lock_purchase_for_activation(${purchaseId}::uuid) AS locked`;
+        if (!locked) throw failure(404, 'PURCHASE_NOT_FOUND');
+        await this.sessions.authorize(tx, access, [action]);
+        const purchase = await tx.purchase.findUniqueOrThrow({ where: { id: purchaseId }, select: { clientId: true, type: true, terms: true } });
+        if (purchase.clientId !== receipt.clientId) throw failure(409, 'PAYMENT_PURCHASE_CLIENT_MISMATCH');
+        const spent = await tx.paymentAllocation.aggregate({ where: { paymentId }, _sum: { amount: true } });
+        if (requestedAmount.gt(receipt.amount.minus(spent._sum.amount ?? 0))) throw failure(409, 'PAYMENT_ALLOCATION_EXCEEDS_AVAILABLE');
+        if (purchase.type === PurchaseType.POSITIVE_PRICE) {
+          const terms = purchase.terms as { price?: unknown; currency?: unknown } | null;
+          if (typeof terms?.price !== 'string' || !/^(?:0|[1-9][0-9]{0,14})\.[0-9]{2}$/.test(terms.price) || terms.currency !== 'SAR') {
+            throw failure(500, 'INTERNAL_ERROR');
+          }
+          const allocated = await tx.paymentAllocation.aggregate({ where: { purchaseId }, _sum: { amount: true } });
+          if (requestedAmount.gt(new Prisma.Decimal(terms.price).minus(allocated._sum.amount ?? 0))) {
+            throw failure(409, 'PAYMENT_ALLOCATION_EXCEEDS_PURCHASE_PRICE');
+          }
+        }
+        // The trigger independently checks receipt eligibility, ownership and remaining receipt funds.
         const [allocation] = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
           VALUES (${paymentId}::uuid, ${purchaseId}::uuid, ${requestedAmount}, ${access.userId}::uuid)

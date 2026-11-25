@@ -100,6 +100,8 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
 
 - Purchase acceptance, payment recording, verification and allocation, and the Admin Purchase Funding viewer with explicit membership activation. See [membership activation](docs/api-contract.md#implemented-membership-activation).
 
+- Admin positive-price purchase operations at `/commercial`, including existing active Client/package selection, agreement evidence, receipt recording, verification, allocation, explicit activation and scoped audit history. See [the S1-A contract](docs/api-contract.md#s1-a-admin-commercial-operations).
+
 - Admin Scheduling and Booking Management at `/scheduling` and `/bookings`. Open a session's booking history from Scheduling or select a session in Booking Management, then search the Client directory and choose a membership. [Booking API contract](docs/api-contract.md#implemented-booking-management-slice-1).
 
 - Production-gated attendance submission, Admin participant return and Coach ATTENDED reaffirmation at `/attendance`, with immutable submission/review history. [Attendance contract and O-09 register](docs/milestone-3-attendance-return-reaffirmation.md).

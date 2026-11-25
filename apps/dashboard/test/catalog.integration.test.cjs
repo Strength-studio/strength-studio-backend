@@ -647,7 +647,7 @@ test('Purchase funding relay forwards only the exact GET route with a valid UUID
   const before = upstreamRequests;
   for (const method of ['HEAD', 'OPTIONS', 'POST', 'PATCH', 'PUT', 'DELETE']) {
     await relay(admin, 405, route, { method });
-    assert.deepEqual(await relay(admin, 404, 'purchases/positive-price', { method }),
+    assert.deepEqual(await relay(admin, 404, 'purchases/positive-price/unsupported', { method }),
       method === 'HEAD' ? null : { code: 'NOT_FOUND' });
   }
   for (const path of ['purchases', 'purchases/' + id, route + '/details', 'purchases/' + id + '/allocate']) {
@@ -1555,6 +1555,180 @@ test('Attendance in Chrome returns one participant and requires reviewing the re
     assert.equal(history.items.length, 2);
     assert.equal(history.items[0].reviewDecision, null);
     assert.equal(history.items[1].reviewDecision.reason, 'Please review the participant completion.');
+  });
+});
+
+
+
+async function s1Fixture(price = '20.00') {
+  const admin = await signIn('admin');
+  const [client, adminUser] = await Promise.all(['client','admin'].map(key => fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email(key) } })));
+  const code = 'S1-' + randomBytes(5).toString('hex');
+  const { sessionTypeId } = await relay(admin, 201, 'session-types', { method: 'POST', payload: { code, name: code, mode: 'INDIVIDUAL' } });
+  const { packageId } = await relay(admin, 201, 'packages', { method: 'POST', payload: { code, name: code, description: '', price, kind: 'TIME', validityDays: 30, sessionAllowance: null, sessionTypeIds: [sessionTypeId] } });
+  const { items: [version] } = await relay(admin, 200, `packages/${packageId}/management`);
+  await relay(admin, 204, `packages/${packageId}/versions/${version.id}/publish`, { method: 'POST', payload: { expectedCurrentVersionId: null, expectedDraftRevision: 1 } });
+  return { admin, client, adminUser, packageId, version, sessionTypeId, acceptance: { clientId: client.id, packageId, packageVersionId: version.id,
+    agreementMethod: 'SIGNED_AGREEMENT', agreementEvidence: 'Synthetic signed agreement', purpose: 'S1-A regression' } };
+}
+
+test('S1-A commercial page and relay enforce Admin, exact methods, CSRF, input and audit scope', async () => {
+  const f = await s1Fixture();
+  for (const role of [null,'noGrant','reader','auditOnly','coach','client']) {
+    const actor = role ? await signIn(role) : { cookie: '' };
+    const page = await fetch(origin+'/commercial', { headers: { cookie: actor.cookie } });
+    const html = await page.text();
+    assert(html.includes(role ? 'Your account does not have access to Purchase operations.' : 'Sign in to continue.'));
+    assert(!html.includes('name="agreementEvidence"'));
+    await relay(actor, role ? 403 : 401, 'purchases/positive-price', { method: 'POST', payload: f.acceptance });
+  }
+  await relay(f.admin, 403, 'purchases/positive-price', { method: 'POST', payload: f.acceptance, csrf: 'wrong' });
+  await relay(f.admin, 403, 'purchases/positive-price', { method: 'POST', payload: f.acceptance, source: 'https://other.invalid' });
+  await relay(f.admin, 400, 'purchases/positive-price', { method: 'POST', payload: { ...f.acceptance, role: 'ADMIN' } });
+  await relay(f.admin, 400, 'purchases/positive-price?extra=1', { method: 'POST', payload: f.acceptance });
+  await relay(f.admin, 400, 'purchases/positive-price', { method: 'POST', payload: f.acceptance, key: '' });
+  await relay(f.admin, 405, 'purchases/positive-price', { allow: 'POST' });
+  await relay(f.admin, 405, 'payments', { method: 'PUT', payload: {}, allow: 'POST' });
+  await relay(f.admin, 404, 'payments/not-a-uuid/verify', { method: 'POST', payload: {} });
+  await relay(f.admin, 404, 'purchases/positive-price/extra', { method: 'POST', payload: f.acceptance });
+  const accept = { method: 'POST', payload: f.acceptance, key: randomUUID() };
+  const { purchaseId } = await relay(f.admin, 201, 'purchases/positive-price', accept);
+  assert.deepEqual(await relay(f.admin, 201, 'purchases/positive-price', accept), { purchaseId });
+  const record = { method: 'POST', key: randomUUID(), payload: { clientId: f.client.id, intakeId: randomUUID(), amount: '25.00', currency: 'SAR', method: 'CASH', receivedAt: new Date().toISOString() } };
+  const { paymentId } = await relay(f.admin, 201, 'payments', record);
+  assert.deepEqual(await relay(f.admin, 201, 'payments', record), { paymentId, status: 'UNVERIFIED' });
+  const verify = { method: 'POST', key: randomUUID(), payload: {} };
+  await relay(f.admin, 200, `payments/${paymentId}/verify`, verify);
+  await relay(f.admin, 200, `payments/${paymentId}/verify`, verify);
+  assert.equal((await relay(f.admin, 409, `payments/${paymentId}/allocations`, { method: 'POST', payload: { purchaseId, amount:'20.01' } })).code, 'PAYMENT_ALLOCATION_EXCEEDS_PURCHASE_PRICE');
+  const allocation = { method:'POST', key:randomUUID(), payload:{ purchaseId, amount:'20.00' } };
+  const allocated = await relay(f.admin,201,`payments/${paymentId}/allocations`,allocation);
+  assert.deepEqual(await relay(f.admin,201,`payments/${paymentId}/allocations`,allocation),allocated);
+  assert.equal((await relay(f.admin,200,membershipRoute(purchaseId))).status,'NOT_CREATED');
+  await relay(await signIn('coach'),403,activationRoute(purchaseId),{method:'POST',payload:{}});
+  await relay(f.admin,200,activationRoute(purchaseId),{method:'POST',payload:{}});
+  assert.equal((await relay(f.admin,200,membershipRoute(purchaseId))).status,'ACTIVE');
+  let cursor; const events=[];
+  do {
+    const page=await relay(f.admin,200,`purchases/${purchaseId}/audit?limit=2`+(cursor?'&after='+cursor:''));
+    events.push(...page.items);cursor=page.nextCursor;
+  } while(cursor);
+  assert.equal(events.length,5);
+  assert(events.every(x=>Object.keys(x).sort().join(',')==='action,actorId,createdAt,id,reason,requestId,targetId,targetType'));
+  for(const role of ['auditOnly','client','coach']) await relay(await signIn(role),403,`purchases/${purchaseId}/audit`);
+  await relay(f.admin,400,`purchases/${purchaseId}/audit?limit=51`);
+  await relay(f.admin,400,`purchases/${purchaseId}/audit?limit=2&limit=3`);
+  await relay(f.admin,405,`purchases/${purchaseId}/audit`,{method:'POST',payload:{},allow:'GET'});
+});
+
+test('S1-A in Chrome resumes every interrupted command and read, activates explicitly and protects account switches', { ...browserTest, timeout: 60_000 }, async () => {
+  const f=await s1Fixture();
+  await withChrome(origin,userPrefix,async browser=>{
+    for(const pair of f.admin.cookie.split('; ')) await browser.setCookie(origin,pair);
+    await browser.go('/commercial');
+    await browser.until(`document.querySelector('select[name=clientId]:enabled option[value="${f.client.id}"]') && document.querySelector('select[name=packageVersionId] option[value="${f.version.id}"]')`,'commercial choices');
+    async function set(name,value,kind='input') {
+      await browser.evaluate(`(()=>{const e=document.querySelector('[name="${name}"]'); const proto=e.tagName==='SELECT'?HTMLSelectElement.prototype:e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('${kind}',{bubbles:true}));return true})()`);
+    }
+    const button = text => `(()=>{const b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true})()`;
+    await set('clientId',f.client.id,'change');await set('packageVersionId',f.version.id,'change');
+    await set('agreementEvidence','Signed synthetic agreement');await set('purpose','S1-A browser regression');
+    await browser.evaluate(`(()=>{window.s1Fetch=window.fetch;window.s1Requests=[];window.s1Fail='acceptance';window.fetch=async(input,options)=>{
+      const url=String(input);const stage=url==='/api/studio/v1/purchases/positive-price'?'acceptance':url==='/api/studio/v1/payments'?'record':/payments\\/[^/]+\\/verify$/.test(url)?'verify':/payments\\/[^/]+\\/allocations$/.test(url)?'allocate':/activate-membership$/.test(url)?'activation':/\\/funding$/.test(url)?'funding':/\\/membership$/.test(url)?'membership':/\\/audit[?]/.test(url)?'audit':null;
+      if(stage)window.s1Requests.push({stage,key:options?.headers?.['Idempotency-Key'],body:options?.body});
+      if(stage&&stage===window.s1Csrf){window.s1Csrf=null;return Response.json({code:'CSRF_DENIED'},{status:403});}
+      const result=await window.s1Fetch(input,options);if(stage&&stage===window.s1Fail&&result.ok){window.s1Fail=null;throw new TypeError('Synthetic lost response');}return result;};return true})()`);
+    await browser.until(button('Record purchase acceptance'),'acceptance submit');
+    await browser.until(`document.querySelector('[role=alert]') && [...document.querySelectorAll('button')].some(b=>b.textContent==='Retry same acceptance'&&!b.disabled)`,'acceptance retry available');
+    assert.equal(await fixture.purchase.count({where:{packageVersionId:f.version.id}}),1);
+    await browser.until(button('Retry same acceptance'),'retry acceptance');
+    await browser.until(`document.querySelector('[name=amount]:enabled')`,'payment form');
+    for(const stage of ['record','verify','allocate','funding','membership']) {
+      if(stage==='verify') {
+        await browser.evaluate(`window.s1Csrf='verify';true`);
+        await browser.until(button('Retry remaining payment steps'),'CSRF rejection');
+        await browser.until(`document.querySelector('[role=alert]')?.textContent.includes('CSRF_DENIED') && document.querySelector('[data-payment-id]')`,'preserved workflow after CSRF rejection');
+      }
+      await browser.evaluate(`window.s1Fail=${JSON.stringify(stage)};true`);
+      await browser.until(button(stage==='record'?'Record, verify and allocate payment':'Retry remaining payment steps'),stage+' submit');
+      await browser.until(`document.querySelector('[role=alert]') && [...document.querySelectorAll('button')].some(b=>b.textContent==='Retry remaining payment steps'&&!b.disabled)`,stage+' retry');
+    }
+    await browser.until(button('Retry remaining payment steps'),'final payment recovery');
+    await browser.until(`document.querySelector('.membership-activation')?.textContent.includes('Pending activation')`,'explicit activation remains pending');
+    const purchase=await fixture.purchase.findFirstOrThrow({where:{packageVersionId:f.version.id}});
+    assert.equal(await fixture.membership.count({where:{purchaseId:purchase.id}}),0);
+    const allocations=await fixture.paymentAllocation.findMany({where:{purchaseId:purchase.id}});assert.equal(allocations.length,1);
+    const receipt=await fixture.payment.findUniqueOrThrow({where:{id:allocations[0].paymentId}});assert.equal(receipt.status,'VERIFIED');
+    await browser.until(button('Activate membership'),'activation confirmation');
+    await browser.evaluate(`window.s1Fail='activation';true`);
+    await browser.until(button('Confirm activation'),'first activation');
+    await browser.until(`document.querySelector('.membership-activation [role=alert]')`,'lost activation response');
+    await browser.until(button('Confirm activation'),'activation replay');
+    await browser.until(`document.querySelector('.membership-activation')?.textContent.includes('Membership activated.')`,'activated');
+    await browser.evaluate(`window.s1Fail='audit';true`);
+    await browser.until(button('Refresh history'),'audit request');
+    await browser.until(`document.querySelector('[role=alert]')`,'audit retryable');
+    await browser.until(button('Refresh history'),'audit retry');
+    await browser.until(`document.querySelectorAll('.commercial-audit li').length===5`,'complete audit');
+    if (process.env.STUDIO_TEST_SCREENSHOTS) await require('node:fs/promises').writeFile(resolve(process.env.STUDIO_TEST_SCREENSHOTS,'s1a-completed.png'), Buffer.from(await browser.screenshot(),'base64'));
+    const requests=await browser.evaluate('window.s1Requests');
+    for(const stage of ['acceptance','record','verify','allocate','activation']) {
+      const attempts=requests.filter(x=>x.stage===stage);assert(attempts.length>=2,stage);assert.equal(new Set(attempts.map(x=>x.key)).size,1,stage+' key');assert.equal(new Set(attempts.map(x=>x.body)).size,1,stage+' body');
+    }
+    assert.equal(requests.filter(x=>x.stage==='allocate').length,2,'read failures must not replay acknowledged allocation');
+    assert.equal(await fixture.membership.count({where:{purchaseId:purchase.id}}),1);
+    const staff=await signIn('noGrant');for(const pair of staff.cookie.split('; ')) await browser.setCookie(origin,pair);
+    await browser.until(button('Refresh history'),'account switch audit');
+    await browser.until(`document.querySelector('[role=alert]')?.textContent==='Your account does not have access to Purchase operations.'`,'denied account switch');
+    assert.equal(await browser.evaluate('document.querySelector("[data-purchase-id], [data-payment-id]")===null'),true);
+    await browser.go('/commercial');
+    await browser.until(`document.querySelector('[role=alert]')?.textContent==='Your account does not have access to Purchase operations.'`,'server page denies Staff');
+  });
+});
+
+test('S1-A in Chrome pages active Clients and packages and requires a reasoned partial-funding activation', { ...browserTest, timeout:60_000 }, async()=>{
+  const f=await s1Fixture('30.00');
+  for(let n=0;n<24;n++) await fixture.user.create({data:{normalizedEmail:randomUUID()+'@example.invalid',role:'CLIENT',accountState:'ACTIVE',emailVerifiedAt:new Date(),client:{create:{displayName:'Paged Client '+n}}}});
+  async function publishedFixture(code,price,id) {
+    const pack=await fixture.package.create({data:{...(id?{id}:{}),code,versions:{create:{version:1,name:'Paged package',description:'',price,kind:'TIME',validityDays:30,eligibility:{create:{sessionTypeId:f.sessionTypeId}}}}},include:{versions:true}});
+    await fixture.packageVersion.update({where:{id:pack.versions[0].id},data:{publishedAt:new Date()}});
+    return pack;
+  }
+  for(let n=0;n<24;n++) await publishedFixture('PAGE-'+randomBytes(5).toString('hex').toUpperCase(),'0.00');
+  const target=await publishedFixture('PAGE-TARGET','30.00','ffffffff-ffff-4fff-8fff-ffffffffffff');
+  await withChrome(origin,userPrefix,async browser=>{
+    for(const pair of f.admin.cookie.split('; ')) await browser.setCookie(origin,pair);
+    await browser.go('/commercial');
+    await browser.until(`document.querySelector('select[name=clientId]:enabled option:nth-child(2)')`,'first Client page');
+    assert.equal(await browser.evaluate(`!!document.querySelector('select[name=clientId] option[value="${f.client.id}"]')`),false);
+    for(const [field,value,label] of [['clientId',f.client.id,'Load more Clients'],['packageVersionId',target.versions[0].id,'Load more packages']]) {
+      for(let page=0;page<8;page++) {
+        if(await browser.evaluate(`!!document.querySelector('select[name=${field}] option[value="${value}"]')`)) break;
+        await browser.until(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent===${JSON.stringify(label)});if(!b||b.disabled)return false;b.click();return true})()`,label);
+        await browser.until(`document.querySelector('select[name=${field}]:enabled')`,'next page ready');
+      }
+      assert(await browser.evaluate(`!!document.querySelector('select[name=${field}] option[value="${value}"]')`));
+    }
+    const pending=await fixture.user.findUniqueOrThrow({where:{normalizedEmail:email('clientPending')}});
+    assert.equal(await browser.evaluate(`!!document.querySelector('select[name=clientId] option[value="${pending.id}"]')`),false);
+    async function set(name,value,event='input') {await browser.evaluate(`(()=>{const e=document.querySelector('[name=${name}]');const p=e.tagName==='SELECT'?HTMLSelectElement.prototype:e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('${event}',{bubbles:true}));return true})()`);}
+    const click=text=>browser.until(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true})()`,text);
+    await set('clientId',f.client.id,'change');await set('packageVersionId',target.versions[0].id,'change');await set('agreementMethod','VERBAL_AGREEMENT','change');
+    await set('agreementEvidence','Synthetic verbal agreement');await set('purpose','Pagination and partial funding');
+    await click('Record purchase acceptance');await browser.until(`document.querySelector('[name=amount]:enabled')`,'payment');
+    await set('amount','10.00');await click('Record, verify and allocate payment');
+    await browser.until(`document.querySelector('.membership-activation')`,'activation');
+    await click('Activate membership');
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent==='Confirm activation').disabled`),true);
+    await browser.evaluate(`document.querySelector('.activation-override input').click();true`);
+    await browser.until(`document.querySelector('.activation-reason textarea')`,'reason');
+    await browser.evaluate(`(()=>{const e=document.querySelector('.activation-reason textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'Approved synthetic partial funding');e.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+    await click('Confirm activation');await browser.until(`document.querySelector('.membership-activation')?.textContent.includes('Membership activated.')`,'active');
+    const purchase=await fixture.purchase.findFirstOrThrow({where:{packageVersionId:target.versions[0].id}});
+    const audit=await fixture.auditLog.findFirstOrThrow({where:{targetType:'MEMBERSHIP',action:'MEMBERSHIP_ACTIVATED',redactedDetails:{path:['purchaseId'],equals:purchase.id}}});
+    assert.equal(audit.reason,'Approved synthetic partial funding');
+    assert.equal(audit.redactedDetails.remainingAmount,'20.00');
+    assert.equal(audit.redactedDetails.overrideUsed,true);
   });
 });
 

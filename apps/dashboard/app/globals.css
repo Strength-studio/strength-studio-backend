@@ -226,3 +226,21 @@ textarea { resize: vertical; }
 .schedule-panel .button-row { align-items: end; }
 .schedule-editor { border: 1px solid var(--line); border-radius: 9px; }
 .schedule-table { overflow-x: auto; }
+
+
+/* S1-A Admin commercial workflow */
+.commercial-steps { display:flex; flex-wrap:wrap; gap:1rem; padding:0; margin:1rem 0 1.5rem; list-style:none; color:var(--muted,#64748b); font-size:.875rem; }
+.commercial-steps li { padding:.55rem .8rem; border:1px solid var(--line); border-radius:999px; }
+.commercial-steps li[aria-current="step"] { color:var(--text); border-color:var(--accent,#64748b); font-weight:650; }
+.commercial-form { display:grid; gap:1rem; max-width:44rem; margin-top:1rem; }
+.commercial-form label { display:grid; gap:.4rem; font-weight:600; }
+.commercial-form input,.commercial-form select,.commercial-form textarea { width:100%; min-width:0; }
+.commercial-form .terms { margin:.25rem 0; }
+.commercial-audit { margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--line); }
+.commercial-audit ol { display:grid; gap:.8rem; padding-left:1.25rem; }
+.commercial-audit li { display:grid; gap:.2rem; }
+.commercial-audit li span,.commercial-audit li small { color:var(--muted,#64748b); }
+
+.commercial-workspace { display: grid; gap: 1rem; padding: 1.25rem; min-width: 0; }
+.commercial-workspace > .panel-heading { padding: 0 0 1rem; }
+.commercial-workspace code { overflow-wrap: anywhere; }
