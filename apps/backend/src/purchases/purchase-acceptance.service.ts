@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AuditAction, AuditTarget, Prisma, PurchaseType, Role } from '@prisma/client';
+import { AccountState, AuditAction, AuditTarget, Prisma, PurchaseType, Role } from '@prisma/client';
 import { AccessContext, Sessions } from '../identity/session.service';
 import { audit } from '../platform/audit';
 import { Commands } from '../platform/commands';
@@ -43,6 +43,9 @@ export class PurchaseAcceptanceService {
         if (!client) throw failure(404, 'CLIENT_NOT_FOUND');
       },
       write: async tx => {
+        if (!complimentary && !await tx.clientProfile.findFirst({
+          where: { userId: clientId, user: { role: Role.CLIENT, accountState: AccountState.ACTIVE } }, select: { userId: true },
+        })) throw failure(409, 'CLIENT_NOT_ACTIVE');
         // Catalog writes lock the parent before the version. Hold both through commit.
         const [offer] = await tx.$queryRaw<{ archived_at: Date | null }[]>`
           SELECT archived_at FROM package WHERE id = ${packageId}::uuid FOR SHARE`;

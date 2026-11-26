@@ -129,6 +129,11 @@ async function withChrome(origin, clientMarker, run) {
         const { currentIndex, entries } = await call('Page.getNavigationHistory');
         await call('Page.navigateToHistoryEntry', { entryId: entries[currentIndex + offset].id });
       },
+      screenshot: async () => {
+        const { cssContentSize } = await call('Page.getLayoutMetrics');
+        return (await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: cssContentSize.width, height: cssContentSize.height, scale: 1 } })).data;
+      },
       lifecycle,
       responses,
       cacheMisses,

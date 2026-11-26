@@ -4,6 +4,7 @@ import { bookingQuery, bookingResponse, bookingRoute, isBookingPath } from '../.
 import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
 import { clientQuery, clientRoute, isClientRelayPath, readClientRoute } from '../../../../../lib/client-relay';
 import { purchaseRelay } from '../../../../../lib/purchase-funding-relay';
+import { commercialRelay } from '../../../../../lib/commercial-relay';
 import { schedulingQuery, schedulingResponse, schedulingRoute } from '../../../../../lib/scheduling';
 import { accessCookie, api, refreshCookie, reply, trustedOrigin, validCsrf } from '../../../../../lib/session';
 
@@ -38,6 +39,8 @@ function rejectedAttendanceRequest(parts: string[]) {
 
 async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST' | 'PATCH') {
   const { path: parts } = await route.params;
+  if (parts[0] === 'purchases' && parts[1] === 'positive-price') return commercialRelay(request, parts);
+  if (parts[0] === 'payments') return commercialRelay(request, parts);
   if (parts[0] === 'purchases') return purchaseRelay(request, parts);
   const legacy = method === 'GET' && parts.length === 1 && parts[0] === 'me' ? 'me'
     : method === 'POST' && parts.length === 2 && parts[0] === 'auth' && parts[1] === 'socket-ticket' ? 'auth/socket-ticket' : null;
@@ -104,6 +107,8 @@ export function HEAD(request: NextRequest, route: Route) {
 
 export async function OPTIONS(request: NextRequest, route: Route) {
   const { path } = await route.params;
+  if (path[0] === 'purchases' && path[1] === 'positive-price') return commercialRelay(request, path);
+  if (path[0] === 'payments') return commercialRelay(request, path);
   if (path[0] === 'purchases') return purchaseRelay(request, path);
   if (attendanceOrOwnSchedulePath(path)) return rejectedAttendanceRequest(path);
   if (isBookingPath(path)) return rejectedBookingRequest(path);
@@ -121,6 +126,8 @@ export function PATCH(request: NextRequest, route: Route) {
 
 export async function PUT(request: NextRequest, route: Route) {
   const { path } = await route.params;
+  if (path[0] === 'purchases' && path[1] === 'positive-price') return commercialRelay(request, path);
+  if (path[0] === 'payments') return commercialRelay(request, path);
   if (path[0] === 'purchases') return purchaseRelay(request, path);
   if (attendanceOrOwnSchedulePath(path)) return rejectedAttendanceRequest(path);
   if (isBookingPath(path)) return rejectedBookingRequest(path);

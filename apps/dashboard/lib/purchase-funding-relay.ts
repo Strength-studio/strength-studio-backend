@@ -115,7 +115,44 @@ export async function purchaseMembershipRelay(request: NextRequest, parts: strin
   }
 }
 
+
+async function purchaseAuditRelay(request: NextRequest, parts: string[]) {
+  const id = parts[1].toLowerCase();
+  if (!purchaseUuid.test(id)) return reply({ code: 'INVALID_INPUT' }, 400);
+  if (request.method !== 'GET') {
+    const response = reply({ code: 'METHOD_NOT_ALLOWED' }, 405); response.headers.set('Allow', 'GET'); return response;
+  }
+  const token = request.cookies.get(accessCookie)?.value;
+  if (!token) return reply({ code: 'UNAUTHENTICATED' }, 401);
+  const query = new URLSearchParams();
+  for (const [key, value] of request.nextUrl.searchParams) {
+    if (query.has(key) || (key === 'limit' ? !/^(?:[1-9]|[1-4][0-9]|50)$/.test(value) : key !== 'after' || !purchaseUuid.test(value))) {
+      return reply({ code: 'INVALID_INPUT' }, 400);
+    }
+    query.set(key, value);
+  }
+  try {
+    const response = await api(`purchases/${id}/audit`, 'GET', { token, query });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) return reply({ code: errorCodes.get(response.status) ?? 'DASHBOARD_UNAVAILABLE' }, errorCodes.has(response.status) ? response.status : 503);
+    const actions = new Set(['PURCHASE_ACCEPTED_RECORDED', 'PAYMENT_RECORDED', 'PAYMENT_VERIFIED', 'PAYMENT_ALLOCATED', 'MEMBERSHIP_ACTIVATED']);
+    const targets = new Set(['PURCHASE', 'PAYMENT', 'PAYMENT_ALLOCATION', 'MEMBERSHIP']);
+    if (!body || !Array.isArray(body.items) || body.items.length > 50
+      || (body.nextCursor !== null && (typeof body.nextCursor !== 'string' || !purchaseUuid.test(body.nextCursor)))) throw new Error('Invalid page');
+    const items = body.items.map((item: Record<string, unknown>) => {
+      if (typeof item.id !== 'string' || !purchaseUuid.test(item.id) || typeof item.createdAt !== 'string' || !Number.isFinite(Date.parse(item.createdAt))
+        || typeof item.action !== 'string' || !actions.has(item.action) || typeof item.targetType !== 'string' || !targets.has(item.targetType)
+        || typeof item.targetId !== 'string' || !purchaseUuid.test(item.targetId)) throw new Error('Invalid event');
+      return { id: item.id, createdAt: item.createdAt, actorId: typeof item.actorId === 'string' ? item.actorId : null,
+        action: item.action, targetType: item.targetType, targetId: item.targetId, requestId: typeof item.requestId === 'string' ? item.requestId : null,
+        reason: typeof item.reason === 'string' ? item.reason : null };
+    });
+    return reply({ items, nextCursor: body.nextCursor });
+  } catch { return reply({ code: 'DASHBOARD_UNAVAILABLE' }, 503); }
+}
+
 export function purchaseRelay(request: NextRequest, parts: string[]) {
+  if (parts.length === 3 && parts[2] === 'audit') return purchaseAuditRelay(request, parts);
   if (parts.length === 3 && (parts[2] === 'membership' || parts[2] === 'activate-membership')) {
     return purchaseMembershipRelay(request, parts);
   }

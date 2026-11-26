@@ -1,10 +1,12 @@
-import { Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
 import { ApiBadRequestResponse, ApiBearerAuth, ApiConflictResponse, ApiForbiddenResponse, ApiInternalServerErrorResponse,
   ApiHeader, ApiNotFoundResponse, ApiOkResponse, ApiOperation, ApiParam, ApiServiceUnavailableResponse, ApiTags,
   ApiUnauthorizedResponse } from '@nestjs/swagger';
-import { failure, RequireAction, StudioRequest } from '../platform/http';
+import { CurrentAccess, failure, RequireAction, StudioRequest } from '../platform/http';
+import { AccessContext } from '../identity/session.service';
 import { ActivateMembershipDto, MembershipActivationDto, MembershipActivationStateDto } from './membership-activation.dto';
 import { MembershipActivationService } from './membership-activation.service';
+import { PurchaseAuditPageDto, PurchaseAuditQuery } from './purchase-audit.dto';
 import { PurchaseFundingDto } from './purchase-funding.dto';
 import { PurchaseFundingService } from './purchase-funding.service';
 
@@ -26,6 +28,19 @@ export class PurchaseFundingController {
   @ApiInternalServerErrorResponse({ description: 'Invalid stored purchase terms or other internal error' })
   summary(@Param('purchaseId', ParseUUIDPipe) purchaseId: string) {
     return this.funding.summary(purchaseId);
+  }
+
+  @Get(':purchaseId/audit') @RequireAction('purchase.funding.read')
+  @ApiOperation({ summary: 'Read audit history for a Purchase and its funding records',
+    description: 'Requires purchase.funding.read and audit.read. Returns paginated, scoped purchase, allocated-payment, allocation and Membership audit events.' })
+  @ApiParam({ name: 'purchaseId', schema: { type: 'string', format: 'uuid' } })
+  @ApiOkResponse({ type: PurchaseAuditPageDto })
+  @ApiBadRequestResponse({ description: 'Invalid purchase ID' })
+  @ApiUnauthorizedResponse()
+  @ApiForbiddenResponse()
+  @ApiNotFoundResponse({ description: 'Purchase not found' })
+  audit(@Param('purchaseId', ParseUUIDPipe) purchaseId: string, @Query() query: PurchaseAuditQuery, @CurrentAccess() access: AccessContext) {
+    return this.funding.audit(access, purchaseId.toLowerCase(), query);
   }
 
   @Get(':purchaseId/membership') @RequireAction('purchase.funding.read')

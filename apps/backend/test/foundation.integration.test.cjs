@@ -1397,8 +1397,8 @@ async function verifiedPayment() {
   return migrator.payment.findUniqueOrThrow({ where: { id } });
 }
 
-async function allocationPurchase(overrides) {
-  const offer = await acceptanceOffer('25.00');
+async function allocationPurchase(overrides, price = '25.00') {
+  const offer = await acceptanceOffer(price);
   return expectStatus(201, positivePricePath, acceptanceRequest(offer, overrides));
 }
 
@@ -1425,7 +1425,7 @@ async function assertAllocationAudits(allocations) {
 
 test('Admin records partial allocations across purchases and spends the exact remainder without financial side effects', async () => {
   const payment = await verifiedPayment();
-  const { purchaseId } = await allocationPurchase();
+  const { purchaseId } = await allocationPurchase(undefined, '500.00');
   const complimentary = await expectStatus(201, complimentaryPath, acceptanceRequest(await acceptanceOffer()));
   const second = await migrator.purchaseAcceptance.findUniqueOrThrow({ where: { id: complimentary.acceptanceId } });
   const purchases = () => migrator.purchase.findMany({
@@ -1531,8 +1531,8 @@ test('allocation rejects invalid input, missing records, unverified payments and
 test('allocation replays normalized requests and conflicts on changed payment, purchase or amount', async () => {
   const payment = await verifiedPayment();
   const otherPayment = await verifiedPayment();
-  const { purchaseId } = await allocationPurchase();
-  const { purchaseId: otherPurchase } = await allocationPurchase();
+  const { purchaseId } = await allocationPurchase(undefined, '500.00');
+  const { purchaseId: otherPurchase } = await allocationPurchase(undefined, '500.00');
   const path = allocationPath(payment.id);
   const write = allocationRequest(purchaseId, '100');
   const counts = await allocationCounts();
@@ -1552,8 +1552,8 @@ test('allocation replays normalized requests and conflicts on changed payment, p
 
 test('concurrent Admin allocations wait on the payment row and the losing request sees the committed total', async () => {
   const payment = await verifiedPayment();
-  const { purchaseId } = await allocationPurchase();
-  const { purchaseId: otherPurchase } = await allocationPurchase();
+  const { purchaseId } = await allocationPurchase(undefined, '500.00');
+  const { purchaseId: otherPurchase } = await allocationPurchase(undefined, '500.00');
   const path = allocationPath(payment.id);
   const counts = await allocationCounts();
   let attempts;
@@ -1571,11 +1571,11 @@ test('concurrent Admin allocations wait on the payment row and the losing reques
           SELECT count(*)::int AS waiting, bool_or(${pid} = ANY(pg_blocking_pids(pid))) AS "behindPaymentLock"
           FROM pg_stat_activity
           WHERE datname = ${databaseName} AND usename = 'studio_api'
-            AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO payment_allocation%'`;
+            AND wait_event_type = 'Lock' AND query LIKE '%FROM payment WHERE id%'`;
         if (waiting === 2 && behindPaymentLock) return;
         await delay(15);
       }
-      assert.fail('Both allocation inserts must wait for the payment row');
+      assert.fail('Both allocation commands must wait for the payment row');
     });
   } finally {
     await attempts;
@@ -1600,7 +1600,7 @@ test('concurrent Admin allocations wait on the payment row and the losing reques
 test('allocation database constraints also enforce eligibility and the aggregate limit on runtime inserts', async () => {
   const payment = await verifiedPayment();
   const unverified = await recordPaymentForVerification();
-  const { purchaseId } = await allocationPurchase();
+  const { purchaseId } = await allocationPurchase(undefined, '500.00');
   const { purchaseId: otherPurchase } = await allocationPurchase({ clientId: users.other.id });
   const path = allocationPath(payment.id);
   await expectStatus(201, path, allocationRequest(purchaseId, '100'));
@@ -1628,7 +1628,7 @@ test('allocation database constraints also enforce eligibility and the aggregate
 
 test('allocation rolls back on audit failure and the original key can retry', async () => {
   const payment = await verifiedPayment();
-  const { purchaseId } = await allocationPurchase();
+  const { purchaseId } = await allocationPurchase(undefined, '500.00');
   const path = allocationPath(payment.id);
   const write = allocationRequest(purchaseId, '123.40');
   const counts = await allocationCounts();
@@ -1672,7 +1672,10 @@ test('purchase funding uses frozen terms and exactly sums allocations across ver
   assert.deepEqual(await expectStatus(200, path, admin), {
     ...summary, allocatedAmount: '0.30', remainingAmount: '0.00', fundingStatus: 'FULLY_FUNDED',
   });
-  await expectStatus(201, allocationPath(second.id), allocationRequest(purchaseId, '0.01'));
+  assert.equal((await expectStatus(409, allocationPath(second.id), allocationRequest(purchaseId, '0.01'))).code, 'PAYMENT_ALLOCATION_EXCEEDS_PURCHASE_PRICE');
+  // Preserve the defensive read regression for legacy/direct-DB overfunded records.
+  await migrator.$executeRaw`INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+    VALUES (${second.id}::uuid, ${purchaseId}::uuid, 0.01, ${users.admin.id}::uuid)`;
   const error = await expectStatus(409, path, admin);
   assert.equal(error.code, 'PURCHASE_OVERFUNDED');
   assert.deepEqual(Object.keys(error).sort(), ['code', 'requestId']);
@@ -1966,7 +1969,10 @@ test('activation rejects overfunding, malformed snapshots and purchases without 
   const { purchaseId } = await allocationPurchase();
   const path = activationPath(purchaseId);
   const payment = await verifiedPayment();
-  await expectStatus(201, allocationPath(payment.id), allocationRequest(purchaseId, '25.01'));
+  assert.equal((await expectStatus(409, allocationPath(payment.id), allocationRequest(purchaseId, '25.01'))).code, 'PAYMENT_ALLOCATION_EXCEEDS_PURCHASE_PRICE');
+  // A historical overfunded fixture must still be refused by activation.
+  await migrator.$executeRaw`INSERT INTO payment_allocation (payment_id, purchase_id, amount, allocated_by)
+    VALUES (${payment.id}::uuid, ${purchaseId}::uuid, 25.01, ${users.admin.id}::uuid)`;
   assert.equal((await expectStatus(409, path, adminWrite(activateWithOverride))).code, 'PURCHASE_OVERFUNDED');
   await migrator.$executeRaw`UPDATE purchase SET terms = jsonb_set(terms, '{price}', '25'::jsonb) WHERE id = ${purchaseId}::uuid`;
   assert.equal((await expectStatus(500, path, adminWrite({}))).code, 'INTERNAL_ERROR');
@@ -3130,24 +3136,56 @@ test('return and reaffirmation remain production-gated and audit failure rolls b
   await expectStatus(204, path + '/reaffirm', reaffirm);
 });
 
-test('concurrent returns, reaffirmations and retries serialize without duplicate evidence', async () => {
-  const f = await attendanceFixture();
-  await expectStatus(204, f.path, f.submit());
-  const path = participantPath(f);
-  const returns = await Promise.all([request(path + '/return', returnRequest(f)),
-    request(path + '/return', { ...returnRequest(f), access: sessions.raceAdmin.accessToken })]);
-  assert.deepEqual(returns.map(row => row.status).sort(), [204, 409]);
-  const revision = (await historyRead(f)).items[0];
-  const reaffirm = { ...f.submit(), body: { expectedScheduleRevision: f.session.revision,
-    expectedRevision: 1, reviewedReturnId: revision.reviewDecision.id, outcome: 'ATTENDED' } };
-  const attempts = await Promise.all([request(path + '/reaffirm', reaffirm), request(path + '/reaffirm', reaffirm),
-    request(path + '/reaffirm', { ...reaffirm, key: randomUUID() }), request(path + '/return', returnRequest(f))]);
-  assert.deepEqual(attempts.map(row => row.status).sort(), [204, 204, 409, 409]);
-  assert.equal(await migrator.attendanceRevision.count({ where: { bookingId: f.confirmed.id } }), 2);
-  assert.equal(await migrator.attendanceReviewDecision.count({ where: { revisionId: revision.id } }), 1);
-  const latest = (await historyRead(f)).items[0];
-  assert.equal(latest.revision, 2);
-  assert.equal(latest.reviewDecision, null);
+test('concurrent returns, reaffirmations and retries serialize without duplicate evidence', async t => {
+  for (const winner of ['shared', 'competing']) {
+    const f = await attendanceFixture();
+    await expectStatus(204, f.path, f.submit());
+    const path = participantPath(f);
+    const returns = await Promise.all([request(path + '/return', returnRequest(f)),
+      request(path + '/return', { ...returnRequest(f), access: sessions.raceAdmin.accessToken })]);
+    assert.deepEqual(returns.map(row => row.status).sort(), [204, 409]);
+    const revision = (await historyRead(f)).items[0];
+    const reaffirm = { ...f.submit(), body: { expectedScheduleRevision: f.session.revision,
+      expectedRevision: 1, reviewedReturnId: revision.reviewDecision.id, outcome: 'ATTENDED' } };
+    const competing = { ...reaffirm, key: randomUUID() };
+    const intents = [reaffirm, reaffirm, competing, returnRequest(f)];
+    const paths = [path + '/reaffirm', path + '/reaffirm', path + '/reaffirm', path + '/return'];
+    const pending = [];
+    try {
+      await migrator.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM scheduled_session WHERE id = ${f.session.id}::uuid FOR UPDATE`;
+        const first = winner === 'shared' ? 0 : 2;
+        pending[first] = request(paths[first], intents[first]);
+        await waitForBookingLock('FROM scheduled_session WHERE id', 1);
+        for (let i = 0; i < intents.length; i++) {
+          if (i !== first) pending[i] = request(paths[i], intents[i]);
+        }
+        // Promise.all launch order does not determine which distinct key wins.
+        // Queue each winner explicitly; its identical-key retry waits on the key claim.
+        await waitForBookingLock('FROM scheduled_session WHERE id', 3);
+      });
+    } finally { await Promise.all(pending); }
+    const attempts = await Promise.all(pending);
+    const expected = winner === 'shared' ? [204, 204, 409, 409] : [409, 409, 204, 409];
+    assert.deepEqual(attempts.map(row => row.status), expected, winner + ' key wins');
+    for (const response of attempts) {
+      if (response.status === 409) assert.equal((await response.json()).code, 'ATTENDANCE_REVISION_STALE');
+    }
+    const winningIntent = winner === 'shared' ? reaffirm : competing;
+    const replays = await Promise.all([request(path + '/reaffirm', winningIntent), request(path + '/reaffirm', winningIntent)]);
+    assert.deepEqual(replays.map(row => row.status), [204, 204], 'concurrent retries replay the committed winner');
+    assert.deepEqual(await migrator.idempotencyKey.findMany({
+      where: { actorId: f.assigned.id, operation: 'attendance.reaffirm', key: { in: [reaffirm.key, competing.key] } },
+      select: { key: true, resultStatus: true },
+    }), [{ key: winningIntent.key, resultStatus: 204 }], 'losing commands leave no successful idempotency claim');
+    assert.equal(await migrator.attendanceRevision.count({ where: { bookingId: f.confirmed.id } }), 2);
+    assert.equal(await migrator.attendanceReviewDecision.count({ where: { revisionId: revision.id } }), 1);
+    const latest = (await historyRead(f)).items[0];
+    assert.equal(latest.revision, 2);
+    assert.equal(latest.reviewDecision, null);
+    assert.equal(await migrator.auditLog.count({ where: { action: 'ATTENDANCE_REAFFIRMED', targetId: latest.id } }), 1);
+    t.diagnostic(winner + ' key wins: ' + JSON.stringify(expected) + '; winning-key retries: [204,204]');
+  }
 });
 
 for (const cancelled of ['booking', 'session']) {
@@ -3280,6 +3318,89 @@ test('return migration upgrades the merged attendance baseline without changing 
     if (databaseCreated) await owner.$executeRawUnsafe(`DROP DATABASE "${upgradeName}" WITH (FORCE)`);
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+
+test('S1-A retries every audited stage after rollback and response loss without duplicates or implicit activation', async () => {
+  const offer = await acceptanceOffer('20.00');
+  const acceptance = acceptanceRequest(offer);
+  const recording = paymentRequest({ amount: '20.00' });
+  let purchaseId, paymentId;
+  const stages = [
+    ['PURCHASE_ACCEPTED_RECORDED', () => [positivePricePath, acceptance], result => { purchaseId = result.purchaseId; }],
+    ['PAYMENT_RECORDED', () => [paymentPath, recording], result => { paymentId = result.paymentId; }],
+    ['PAYMENT_VERIFIED', () => [verifyPaymentPath(paymentId), adminWrite()], () => {}],
+    ['PAYMENT_ALLOCATED', () => [allocationPath(paymentId), allocationRequest(purchaseId, '20.00')], () => {}],
+    ['MEMBERSHIP_ACTIVATED', () => [activationPath(purchaseId), adminWrite({})], () => {}],
+  ];
+  for (const [action, args, receive] of stages) {
+    const [path, options] = args();
+    const status = ['PAYMENT_VERIFIED', 'MEMBERSHIP_ACTIVATED'].includes(action) ? 200 : 201;
+    const before = await Promise.all([migrator.purchase.count(), migrator.payment.count(), migrator.paymentAllocation.count(), migrator.membership.count(), migrator.idempotencyKey.count()]);
+    await migrator.$executeRawUnsafe(`ALTER TABLE audit_log ADD CONSTRAINT s1a_reject_stage CHECK (action <> '${action}') NOT VALID`);
+    try {
+      await expectStatus(500, path, options);
+      assert.deepEqual(await Promise.all([migrator.purchase.count(), migrator.payment.count(), migrator.paymentAllocation.count(), migrator.membership.count(), migrator.idempotencyKey.count()]), before);
+    } finally { await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT s1a_reject_stage`; }
+    const result = await expectStatus(status, path, options); receive(result);
+    // An acknowledged command may have lost its HTTP response: replay its exact original intent.
+    assert.deepEqual(await expectStatus(status, path, options), result);
+    if (action !== 'MEMBERSHIP_ACTIVATED') assert.equal(await migrator.membership.count({ where: { purchaseId } }), 0);
+  }
+  const events = await expectStatus(200, `/purchases/${purchaseId}/audit`, adminRead());
+  assert.deepEqual(events.items.map(x => x.action).sort(), stages.map(x => x[0]).sort());
+  assert.equal(await migrator.payment.count({ where: { intakeId: recording.body.intakeId } }), 1);
+  assert.equal(await migrator.paymentAllocation.count({ where: { purchaseId } }), 1);
+  assert.equal((await migrator.membership.findUniqueOrThrow({ where: { purchaseId } })).status, 'ACTIVE');
+});
+
+test('S1-A freezes terms, rejects inactive Clients and serializes different receipts against the final purchase amount', async () => {
+  const offer = await acceptanceOffer('25.00');
+  assert.equal((await expectStatus(409, positivePricePath, acceptanceRequest(offer, { clientId: users.disabled.id }))).code, 'CLIENT_NOT_ACTIVE');
+  const { purchaseId } = await expectStatus(201, positivePricePath, acceptanceRequest(offer));
+  const [one, two] = await Promise.all([verifiedPayment(), verifiedPayment()]);
+  const results = await Promise.all([request(allocationPath(one.id), allocationRequest(purchaseId, '20.00')),
+    request(allocationPath(two.id), { ...allocationRequest(purchaseId, '20.00'), access: sessions.raceAdmin.accessToken })]);
+  assert.deepEqual(results.map(x => x.status).sort(), [201,409]);
+  assert.equal((await results.find(x => x.status === 409).json()).code, 'PAYMENT_ALLOCATION_EXCEEDS_PURCHASE_PRICE');
+  assert.equal((await migrator.paymentAllocation.aggregate({ where: { purchaseId }, _sum: { amount: true } }))._sum.amount.toFixed(2), '20.00');
+  assert.equal((await expectStatus(200, fundingPath(purchaseId), adminRead())).remainingAmount, '5.00');
+  const { versionId } = await expectStatus(201, offer.path + '/versions', adminWrite({ expectedCurrentVersionId: offer.packageVersionId, terms: { ...offer.terms, price: '100.00' } }));
+  await expectStatus(204, `${offer.path}/versions/${versionId}/publish`, adminWrite({ expectedCurrentVersionId: offer.packageVersionId, expectedDraftRevision: 1 }));
+  await expectStatus(409, allocationPath(one.id), allocationRequest(purchaseId, '5.01'));
+  assert.equal((await expectStatus(200, fundingPath(purchaseId), adminRead())).purchasePrice, '25.00');
+});
+
+test('S1-A audit requires both permissions, scopes shared receipts and preserves exact cursor ordering', async t => {
+  const { purchaseId } = await allocationPurchase();
+  const { purchaseId: other } = await allocationPurchase();
+  const receipt = await verifiedPayment();
+  const { allocationId } = await expectStatus(201, allocationPath(receipt.id), allocationRequest(purchaseId, '5.00'));
+  const unrelated = await expectStatus(201, allocationPath(receipt.id), allocationRequest(other, '5.00'));
+  const path = `/purchases/${purchaseId}/audit`;
+  await expectStatus(401, path);
+  for (const actor of ['staff','coach','client','clientManager']) await expectStatus(403, path, { access: sessions[actor].accessToken });
+  await expectStatus(404, `/purchases/${randomUUID()}/audit`, adminRead());
+  for (const query of ['?limit=0','?limit=51','?unexpected=1',`?after=${randomUUID()}`]) await expectStatus(400, path+query, adminRead());
+  // Identical millisecond timestamps with distinct microseconds exercise lossless cursor comparisons.
+  await migrator.$executeRaw`UPDATE audit_log SET created_at = '2026-01-01 00:00:00.000123+00' WHERE target_id = ${receipt.id}::uuid`;
+  const expected = await expectStatus(200, path, adminRead());
+  const collected = []; let after;
+  do {
+    const page = await expectStatus(200, path+'?limit=1'+(after ? '&after='+after : ''), adminRead());
+    collected.push(...page.items); after = page.nextCursor;
+  } while (after);
+  assert.deepEqual(collected, expected.items);
+  assert.equal(new Set(collected.map(x=>x.id)).size, collected.length);
+  assert(collected.some(x=>x.targetId === allocationId));
+  assert(!collected.some(x=>x.targetId === other || x.targetId === unrelated.allocationId));
+  assert(collected.every(x=>!('details' in x) && !('redactedDetails' in x)));
+  const security = app.get(Sessions), original = security.authorize.bind(security);
+  t.mock.method(security, 'authorize', async (tx, access, actions) => {
+    if (actions.length === 1 && actions[0] === 'audit.read') throw require('../dist/platform/http').failure(403,'FORBIDDEN');
+    return original(tx, access, actions);
+  });
+  await expectStatus(403, path, adminRead());
 });
 
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
