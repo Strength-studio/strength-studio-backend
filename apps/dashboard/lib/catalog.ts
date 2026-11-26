@@ -68,8 +68,8 @@ async function request(path: string, init?: RequestInit) {
   return checked(response);
 }
 
-export async function get<T>(path: string): Promise<T> {
-  return (await request('/api/studio/v1/' + path)).json();
+export async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return (await request('/api/studio/v1/' + path, { signal })).json();
 }
 
 export type CatalogWrite = { path: string; method: 'POST' | 'PATCH'; body: string; key: string };
@@ -78,10 +78,10 @@ export function newWrite(path: string, payload: object, method: CatalogWrite['me
   return { path, method, body: JSON.stringify(payload), key: crypto.randomUUID() };
 }
 
-export async function write<T = { packageId?: string; versionId?: string; sessionTypeId?: string }>(intent: CatalogWrite): Promise<Partial<T>> {
-  const { csrfToken } = await (await request('/api/session/csrf')).json();
+export async function write<T = { packageId?: string; versionId?: string; sessionTypeId?: string }>(intent: CatalogWrite, signal?: AbortSignal): Promise<Partial<T>> {
+  const { csrfToken } = await (await request('/api/session/csrf', { signal })).json();
   const response = await request('/api/studio/v1/' + intent.path, {
-    method: intent.method, body: intent.body,
+    method: intent.method, body: intent.body, signal,
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken, 'Idempotency-Key': intent.key },
   });
   return response.status === 204 ? {} : await response.json() as T;

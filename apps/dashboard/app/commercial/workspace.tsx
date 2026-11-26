@@ -12,6 +12,13 @@ const cents = (value: string) => { const [whole, fraction = ''] = value.split('.
 type Receipt = { intent?: CatalogWrite; id?: string; verify?: CatalogWrite; verified?: boolean; allocate?: CatalogWrite; allocated?: boolean };
 
 export function CommercialWorkspace() {
+  const [accessFailure, setAccessFailure] = useState<401 | 403 | null>(null);
+  if (accessFailure) return <p className="notice error" role="alert">{accessFailure === 401
+    ? 'Your session expired. Sign in again to continue.' : 'Your account does not have access to Purchase operations.'}</p>;
+  return <CommercialWorkflow onAccessFailure={setAccessFailure} />;
+}
+
+function CommercialWorkflow({ onAccessFailure }: { onAccessFailure: (status: 401 | 403) => void }) {
   const [clients, setClients] = useState<Client[]>([]), [versions, setVersions] = useState<Version[]>([]);
   const [clientCursor, setClientCursor] = useState<string | null>(null), [packageCursor, setPackageCursor] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -23,42 +30,72 @@ export function CommercialWorkspace() {
   const [purchaseId, setPurchaseId] = useState(''), [paymentId, setPaymentId] = useState('');
   const [funding, setFunding] = useState<PurchaseFunding | null>(null), [membership, setMembership] = useState<MembershipState | null>(null);
   const [audit, setAudit] = useState<AuditEvent[]>([]), [auditCursor, setAuditCursor] = useState<string | null>(null);
-  const [denied, setDenied] = useState(false);
+  const [activationRevision, setActivationRevision] = useState(0);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [acceptanceStarted, setAcceptanceStarted] = useState(false), [paymentStarted, setPaymentStarted] = useState(false);
   const acceptance = useRef<CatalogWrite | null>(null), receipt = useRef<Receipt>({}), inFlight = useRef(false);
+  const active = useRef(true);
+  const transport = useRef(new AbortController());
   const client = clients.find(item => item.id === clientId), version = versions.find(item => item.id === versionId);
 
   function failed(cause: unknown) {
-    if (cause instanceof CatalogError && cause.status === 401) { window.location.replace('/?session=expired'); return; }
-    if (cause instanceof CatalogError && cause.status === 403 && cause.code === 'FORBIDDEN') { setDenied(true); return; }
+    if (!active.current) return;
+    if (cause instanceof CatalogError && (cause.status === 401 || (cause.status === 403 && cause.code === 'FORBIDDEN'))) {
+      active.current = false;
+      transport.current.abort();
+      acceptance.current = null; receipt.current = {};
+      // Unmount the workflow to discard all Client, agreement, receipt, funding and audit state.
+      onAccessFailure(cause.status as 401 | 403);
+      if (cause.status === 401) window.location.replace('/?session=expired');
+      return;
+    }
     setError(cause instanceof CatalogError ? `Request could not complete (${cause.code}). Review the current record and retry the same operation.`
       : 'The result could not be confirmed. Retry this operation with its original request.');
   }
+  async function current<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    if (!active.current) throw new Error('WORKSPACE_INVALIDATED');
+    const controller = transport.current;
+    try {
+      const result = await run(controller.signal);
+      if (!active.current || controller !== transport.current) throw new Error('WORKSPACE_INVALIDATED');
+      return result;
+    } catch (cause) { if (controller === transport.current) failed(cause); throw cause; }
+  }
   async function chooseClients(after: string | null = null) {
     const query = new URLSearchParams({ limit: '20', accountState: 'ACTIVE', ...(search.trim() ? { q: search.trim() } : {}), ...(after ? { after } : {}) });
-    const page = await get<Page<Client>>(`clients?${query}`);
+    const page = await current(signal => get<Page<Client>>(`clients?${query}`, signal));
     setClients(previous => after ? [...previous, ...page.items] : page.items); setClientCursor(page.nextCursor);
   }
   async function choosePackages(after: string | null = null) {
-    const page = await get<Page<Version>>('packages?' + new URLSearchParams({ limit: '20', ...(after ? { after } : {}) }));
+    const page = await current(signal => get<Page<Version>>('packages?' + new URLSearchParams({ limit: '20', ...(after ? { after } : {}) }), signal));
     const eligible = page.items.filter(item => item.currency === 'SAR' && !/^0(?:\.0+)?$/.test(item.price));
     setVersions(previous => after ? [...previous, ...eligible] : eligible); setPackageCursor(page.nextCursor);
   }
   async function readAudit(after: string | null = null) {
-    const page = await get<Page<AuditEvent>>(`purchases/${purchaseId}/audit?` + new URLSearchParams({ limit: '20', ...(after ? { after } : {}) }));
+    const page = await current(signal => get<Page<AuditEvent>>(`purchases/${purchaseId}/audit?` + new URLSearchParams({ limit: '20', ...(after ? { after } : {}) }), signal));
     setAudit(previous => after ? [...previous, ...page.items] : page.items); setAuditCursor(page.nextCursor);
   }
-  async function refresh() {
-    const [f, m] = await Promise.all([get<PurchaseFunding>(`purchases/${purchaseId}/funding`), get<MembershipState>(`purchases/${purchaseId}/membership`)]);
+  async function refresh(resetActivation = false) {
+    const [f, m] = await Promise.all([current(signal => get<PurchaseFunding>(`purchases/${purchaseId}/funding`, signal)),
+      current(signal => get<MembershipState>(`purchases/${purchaseId}/membership`, signal))]);
+    if (!active.current) throw new Error('WORKSPACE_INVALIDATED');
     setFunding(f); setMembership(m);
+    if (resetActivation) setActivationRevision(value => value + 1);
   }
   async function reading(run: () => Promise<void>) {
-    if (inFlight.current) return;
+    if (!active.current || inFlight.current) return;
+    const controller = transport.current;
     inFlight.current = true; setBusy(true); setError('');
-    try { await run(); } catch (cause) { failed(cause); } finally { inFlight.current = false; setBusy(false); }
+    try { await run(); } catch (cause) { if (controller === transport.current) failed(cause); } finally {
+      if (controller === transport.current) { inFlight.current = false; if (active.current) setBusy(false); }
+    }
   }
-  useEffect(() => { void reading(async () => { await chooseClients(); await choosePackages(); }); }, []);
+  useEffect(() => {
+    active.current = true;
+    if (transport.current.signal.aborted) transport.current = new AbortController();
+    void reading(async () => { await chooseClients(); await choosePackages(); });
+    return () => { active.current = false; transport.current.abort(); inFlight.current = false; acceptance.current = null; receipt.current = {}; };
+  }, []);
 
   async function accept(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -68,7 +105,8 @@ export function CommercialWorkspace() {
         agreementMethod, agreementEvidence: agreementEvidence.trim(), purpose: purpose.trim() });
       setAcceptanceStarted(true);
       let result: { purchaseId?: string };
-      try { result = await write<{ purchaseId: string }>(acceptance.current); } catch (cause) {
+      const intent = acceptance.current;
+      try { result = await current(signal => write<{ purchaseId: string }>(intent, signal)); } catch (cause) {
         if (cause instanceof CatalogError && (cause.status === 400 || ['CLIENT_NOT_ACTIVE', 'CATALOG_VERSION_NOT_ELIGIBLE'].includes(cause.code))) {
           acceptance.current = null; setAcceptanceStarted(false);
         }
@@ -90,7 +128,8 @@ export function CommercialWorkspace() {
       setPaymentStarted(true);
       if (!checkpoint.id) {
         let result: { paymentId?: string };
-        try { result = await write<{ paymentId: string }>(checkpoint.intent); } catch (cause) {
+        const intent = checkpoint.intent;
+        try { result = await current(signal => write<{ paymentId: string }>(intent, signal)); } catch (cause) {
           if (cause instanceof CatalogError && cause.status === 400) { checkpoint.intent = undefined; setPaymentStarted(false); }
           throw cause;
         }
@@ -99,24 +138,25 @@ export function CommercialWorkspace() {
       }
       if (!checkpoint.verified) {
         checkpoint.verify ??= newWrite(`payments/${checkpoint.id}/verify`, {});
-        await write(checkpoint.verify); checkpoint.verified = true;
+        const intent = checkpoint.verify;
+        await current(signal => write(intent, signal)); checkpoint.verified = true;
       }
       if (!checkpoint.allocated) {
         checkpoint.allocate ??= newWrite(`payments/${checkpoint.id}/allocations`, { purchaseId, amount: JSON.parse(checkpoint.intent.body).amount });
-        await write(checkpoint.allocate); checkpoint.allocated = true;
+        const intent = checkpoint.allocate;
+        await current(signal => write(intent, signal)); checkpoint.allocated = true;
       }
       await refresh();
       setNotice('Payment recorded, verified and allocated. Membership activation is a separate Admin action.');
     });
   }
 
-  if (denied) return <p className="notice error" role="alert">Your account does not have access to Purchase operations.</p>;
   return <section className="panel commercial-workspace" aria-busy={busy}>
     <header className="panel-heading"><h2>Positive-price purchase</h2><span className="badge published">Admin workflow</span></header>
     {error && <p className="notice error" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}
     {!purchaseId ? <>
       <form className="filters" onSubmit={event => { event.preventDefault(); setClientId(''); void reading(() => chooseClients()); }}>
-        <label>Find active Client<input name="clientSearch" value={search} maxLength={120} onChange={event => setSearch(event.target.value)} disabled={busy || acceptanceStarted} /></label>
+        <label>Find active Client<input name="clientSearch" value={search} maxLength={120} onChange={event => { setSearch(event.target.value); setClientCursor(null); }} disabled={busy || acceptanceStarted} /></label>
         <button className="button secondary" disabled={busy || acceptanceStarted}>Search Clients</button>
       </form>
       {!acceptanceStarted && <button type="button" disabled={busy} onClick={() => void reading(async () => { await chooseClients(); await choosePackages(); })}>Reload choices</button>}
@@ -151,7 +191,9 @@ export function CommercialWorkspace() {
       </form>}
       {funding && <><dl className="terms"><div><dt>Purchase price</dt><dd>{money(funding.purchasePrice)}</dd></div><div><dt>Allocated</dt><dd>{money(funding.allocatedAmount)}</dd></div>
         <div><dt>Remaining</dt><dd>{money(funding.remainingAmount)}</dd></div><div><dt>Funding status</dt><dd>{funding.fundingStatus}</dd></div></dl>
-        <MembershipActivation funding={funding} membership={membership} onBusy={setBusy} onReload={() => void reading(refresh)} /></>}
+        <MembershipActivation key={activationRevision} funding={funding} membership={membership} signal={transport.current.signal}
+          onBusy={value => { if (active.current) setBusy(value); }} onAccessFailure={failed}
+          onReload={() => void reading(() => refresh(true))} /></>}
       <section className="commercial-audit" aria-labelledby="purchase-audit-heading"><h3 id="purchase-audit-heading">Purchase audit history</h3>
         <button type="button" className="button quiet" disabled={busy} onClick={() => void reading(() => readAudit())}>Refresh history</button>
         {!!audit.length && <ol>{audit.map(item => <li key={item.id}><strong>{item.action.replaceAll('_', ' ')}</strong>

@@ -25,8 +25,10 @@ const errors: Record<string, string> = {
   CSRF_DENIED: 'Your confirmation could not be verified. Refresh the purchase and confirm again.',
 };
 
-export function MembershipActivation({ funding, membership, onBusy, onReload }: {
+export function MembershipActivation({ funding, membership, onBusy, onReload, onAccessFailure, signal }: {
   funding: PurchaseFunding; membership: MembershipState | null; onBusy: (busy: boolean) => void; onReload: () => void;
+  onAccessFailure?: (error: CatalogError) => void;
+  signal?: AbortSignal;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [override, setOverride] = useState(false);
@@ -63,11 +65,17 @@ export function MembershipActivation({ funding, membership, onBusy, onReload }: 
     onBusy(true);
     setError('');
     try {
-      const { membership: activated } = await write<ActivationResult>(intent.current);
+      const { membership: activated } = await write<ActivationResult>(intent.current, signal);
       if (!activated) throw new CatalogError(503, 'DASHBOARD_UNAVAILABLE');
       setResult(activated);
       reset();
     } catch (failure) {
+      if (onAccessFailure && failure instanceof CatalogError
+        && (failure.status === 401 || (failure.status === 403 && failure.code === 'FORBIDDEN'))) {
+        intent.current = null;
+        onAccessFailure(failure);
+        return;
+      }
       if (failure instanceof CatalogError && failure.status === 401) {
         window.location.replace('/?session=expired');
         return;

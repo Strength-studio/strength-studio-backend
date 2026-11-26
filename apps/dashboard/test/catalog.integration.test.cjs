@@ -1732,6 +1732,154 @@ test('S1-A in Chrome pages active Clients and packages and requires a reasoned p
   });
 });
 
+async function commercialSet(browser, name, value, event = 'input') {
+  await browser.evaluate(`(()=>{const e=document.querySelector('[name="${name}"]');
+    const p=e.tagName==='SELECT'?HTMLSelectElement.prototype:e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(p,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('${event}',{bubbles:true}));return true})()`);
+}
+
+async function commercialClick(browser, label) {
+  await browser.until(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()===${JSON.stringify(label)});
+    if(!b||b.disabled)return false;b.click();return true})()`,label);
+}
+
+async function completeCommercialPayment(browser, f) {
+  for (const pair of f.admin.cookie.split('; ')) await browser.setCookie(origin,pair);
+  await browser.go('/commercial');
+  await browser.until(`document.querySelector('[name=clientSearch]:enabled') && document.querySelectorAll('select[name=clientId] option').length>1`, 'initial commercial choices');
+  await commercialSet(browser,'clientSearch',f.client.normalizedEmail);
+  await commercialClick(browser,'Search Clients');
+  await browser.until(`document.querySelector('select[name=clientId]:enabled option[value="${f.client.id}"]')`, 'selected Client');
+  for (let page=0;page<8;page++) {
+    if (await browser.evaluate(`!!document.querySelector('select[name=packageVersionId] option[value="${f.version.id}"]')`)) break;
+    await commercialClick(browser,'Load more packages');
+    await browser.until(`document.querySelector('select[name=packageVersionId]:enabled')`, 'next package page');
+  }
+  await browser.until(`document.querySelector('select[name=packageVersionId] option[value="${f.version.id}"]')`, 'selected package');
+  await commercialSet(browser,'clientId',f.client.id,'change');
+  await commercialSet(browser,'packageVersionId',f.version.id,'change');
+  await commercialSet(browser,'agreementEvidence','Synthetic review regression agreement');
+  await commercialSet(browser,'purpose','S1-A review regression');
+  await commercialClick(browser,'Record purchase acceptance');
+  await browser.until(`document.querySelector('[name=amount]:enabled')`, 'purchase accepted');
+  await commercialClick(browser,'Record, verify and allocate payment');
+  await browser.until(`document.querySelector('.membership-activation')?.textContent.includes('Pending activation')`, 'payment complete');
+  return browser.evaluate(`document.querySelector('[data-purchase-id]').textContent`);
+}
+
+const concealedCommercialData = `!document.querySelector('.commercial-workspace, [data-purchase-id], [data-payment-id], .commercial-audit, .terms, [name=clientId], [name=agreementEvidence]')`;
+const commercialDenied = `document.querySelector('[role=alert]')?.textContent==='Your account does not have access to Purchase operations.'`;
+
+test('S1-A in Chrome clears the entire commercial workflow after activation is denied to a changed account', { ...browserTest, timeout:60_000 }, async () => {
+  const f=await s1Fixture();
+  await withChrome(origin,userPrefix,async browser=>{
+    const purchaseId=await completeCommercialPayment(browser,f);
+    await commercialClick(browser,'Refresh history');
+    await browser.until(`document.querySelectorAll('.commercial-audit li').length===4`, 'loaded commercial audit');
+    await commercialClick(browser,'Activate membership');
+    await browser.evaluate(`window.s1StaleConfirmation=document.querySelector('.activation-confirmation');true`);
+    const coach=await signIn('coach');
+    for(const pair of coach.cookie.split('; ')) await browser.setCookie(origin,pair);
+    await commercialClick(browser,'Confirm activation');
+    await browser.until(commercialDenied, 'parent workspace denied');
+    assert.equal(await browser.evaluate(concealedCommercialData),true);
+    assert.equal(await browser.evaluate(`document.querySelectorAll('form,button').length`),0);
+    assert.equal(await fixture.membership.count({where:{purchaseId}}),0);
+    const allocationCount=await fixture.paymentAllocation.count({where:{purchaseId}});
+    // Restoring cookies alone must not resurrect the invalidated workflow or its old event handlers.
+    for(const pair of f.admin.cookie.split('; ')) await browser.setCookie(origin,pair);
+    await browser.evaluate(`window.s1StaleConfirmation.requestSubmit();true`);
+    await browser.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await browser.evaluate(`(${commercialDenied}) && (${concealedCommercialData})`),true);
+    assert.equal(await fixture.membership.count({where:{purchaseId}}),0);
+    assert.equal(await fixture.paymentAllocation.count({where:{purchaseId}}),allocationCount);
+    await browser.go('/commercial');
+    await browser.until(`document.querySelector('[name=clientSearch]:enabled')`, 'fresh authorized workflow');
+    assert.equal(await browser.evaluate(`!document.querySelector('[data-purchase-id], [data-payment-id], .commercial-audit')`),true);
+  });
+});
+
+test('S1-A in Chrome clears stale activation conflicts only after a successful authoritative refresh', { ...browserTest, timeout:60_000 }, async () => {
+  const f=await s1Fixture();
+  await withChrome(origin,userPrefix,async browser=>{
+    const purchaseId=await completeCommercialPayment(browser,f);
+    await relay(f.admin,200,`purchases/${purchaseId}/activate-membership`,{method:'POST',payload:{}});
+    await commercialClick(browser,'Activate membership');await commercialClick(browser,'Confirm activation');
+    await browser.until(`document.querySelector('.membership-activation [role=alert]')?.textContent.includes('already been activated')`, 'concurrent activation conflict');
+    await browser.evaluate(`(()=>{const real=window.fetch;window.s1FailRefresh=true;window.fetch=(input,options)=>{
+      if(window.s1FailRefresh && String(input).endsWith('/funding')){window.s1FailRefresh=false;return Promise.resolve(Response.json({code:'DASHBOARD_UNAVAILABLE'},{status:503}));}
+      return real(input,options);};return true})()`);
+    await commercialClick(browser,'Refresh purchase');
+    await browser.until(`document.querySelector('.commercial-workspace')?.getAttribute('aria-busy')==='false' && document.querySelector('.membership-activation [role=alert]')`, 'failed refresh retains conflict');
+    await commercialClick(browser,'Refresh purchase');
+    await browser.until(`document.querySelector('.membership-activation p')?.textContent==='Active' && document.querySelector('.commercial-workspace')?.getAttribute('aria-busy')==='false'`, 'refreshed authoritative Membership');
+    assert.equal(await browser.evaluate(`document.querySelector('.membership-activation [role=alert], .activation-confirmation')===null`),true);
+    assert.equal(await browser.evaluate(`document.querySelectorAll('.membership-activation button').length`),0);
+    assert.equal(await fixture.membership.count({where:{purchaseId}}),1);
+  });
+});
+
+test('S1-A in Chrome invalidates Client pagination when the edited search query changes', { ...browserTest, timeout:60_000 }, async () => {
+  const a='QUERY-A-'+randomBytes(4).toString('hex'),b='QUERY-B-'+randomBytes(4).toString('hex');
+  for(const query of [a,b]) for(let n=0;n<22;n++) await fixture.user.create({data:{normalizedEmail:randomUUID()+'@example.invalid',role:'CLIENT',accountState:'ACTIVE',emailVerifiedAt:new Date(),client:{create:{displayName:query+' '+n}}}});
+  const admin=await signIn('admin');
+  await withChrome(origin,userPrefix,async browser=>{
+    for(const pair of admin.cookie.split('; ')) await browser.setCookie(origin,pair);
+    await browser.go('/commercial');
+    await browser.until(`document.querySelector('[name=clientSearch]:enabled') && document.querySelectorAll('select[name=clientId] option').length>1`, 'search ready');
+    await browser.evaluate(`(()=>{const real=window.fetch;window.s1ClientPages=[];window.fetch=async(input,options)=>{
+      const response=await real(input,options);if(String(input).startsWith('/api/studio/v1/clients?')){
+        const query=new URL(String(input),location.origin).searchParams;const page=await response.clone().json();
+        window.s1ClientPages.push({q:query.get('q'),after:query.get('after'),next:page.nextCursor,status:response.status});}
+      return response;};return true})()`);
+    await commercialSet(browser,'clientSearch',a);await commercialClick(browser,'Search Clients');
+    await browser.until(`document.querySelectorAll('select[name=clientId] option').length===21 && document.querySelector('[name=clientSearch]:enabled')`, 'first query A page');
+    await browser.evaluate(`window.s1OldLoadMore=[...document.querySelectorAll('button')].find(x=>x.textContent==='Load more Clients');true`);
+    await commercialSet(browser,'clientSearch',b);
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].some(x=>x.textContent==='Load more Clients')`),false);
+    await browser.evaluate(`window.s1OldLoadMore.click();true`);
+    assert.equal(await browser.evaluate('window.s1ClientPages.length'),1,'Editing the query must invalidate the old paging operation');
+    await commercialClick(browser,'Search Clients');
+    await browser.until(`document.querySelector('[name=clientSearch]:enabled') && document.querySelectorAll('select[name=clientId] option').length===21`, 'first query B page');
+    await commercialClick(browser,'Load more Clients');
+    await browser.until(`document.querySelectorAll('select[name=clientId] option').length===23 && document.querySelector('[name=clientSearch]:enabled')`, 'query B next page');
+    const pages=await browser.evaluate('window.s1ClientPages');
+    assert.deepEqual(pages.map(x=>[x.q,x.after,x.status]),[[a,null,200],[b,null,200],[b,pages[1].next,200]]);
+    assert.notEqual(pages[0].next,pages[1].next);
+    assert.equal(await browser.evaluate(`document.querySelector('[role=alert]')===null`),true);
+  });
+});
+
+test('S1-A in Chrome discards delayed refresh data and aborts requests after authorization is lost', { ...browserTest, timeout:60_000 }, async () => {
+  const f=await s1Fixture();
+  await withChrome(origin,userPrefix,async browser=>{
+    const purchaseId=await completeCommercialPayment(browser,f);
+    await relay(f.admin,200,`purchases/${purchaseId}/activate-membership`,{method:'POST',payload:{}});
+    await commercialClick(browser,'Activate membership');await commercialClick(browser,'Confirm activation');
+    await browser.until(`document.querySelector('.membership-activation [role=alert]')`, 'activation conflict');
+    await browser.evaluate(`(()=>{const real=window.fetch;window.fetch=async(input,options)=>{
+      const url=String(input);
+      if(url.endsWith('/funding')){const response=await real(input,options);const body=await response.json();
+        window.s1RefreshSignal=options.signal;window.s1FundingReady=true;
+        return new Promise(resolve=>{window.s1ReleaseFunding=()=>resolve(Response.json(body));});}
+      if(url.endsWith('/membership')) await new Promise(resolve=>{window.s1ReleaseMembership=resolve;});
+      return real(input,options);};return true})()`);
+    await commercialClick(browser,'Refresh purchase');
+    await browser.until(`window.s1FundingReady && !!window.s1ReleaseMembership`, 'held authorized funding response');
+    const coach=await signIn('coach');
+    for(const pair of coach.cookie.split('; ')) await browser.setCookie(origin,pair);
+    await browser.evaluate(`window.s1ReleaseMembership();true`);
+    await browser.until(commercialDenied, 'authorization loss invalidates workspace');
+    assert.equal(await browser.evaluate('window.s1RefreshSignal?.aborted===true'),true);
+    assert.equal(await browser.evaluate(concealedCommercialData),true);
+    // Deliberately release a stale success despite the aborted signal to exercise the state guard.
+    await browser.evaluate(`window.s1ReleaseFunding();new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await browser.evaluate(`(${commercialDenied}) && (${concealedCommercialData})`),true);
+    assert.equal(await browser.evaluate(`document.querySelectorAll('form,button').length`),0);
+    assert.equal(await fixture.membership.count({where:{purchaseId}}),1);
+  });
+});
+
 test('catalog relay returns a safe service unavailable response when the backend stops', async () => {
   const admin = await signIn('admin');
   await api.close();
