@@ -3136,24 +3136,56 @@ test('return and reaffirmation remain production-gated and audit failure rolls b
   await expectStatus(204, path + '/reaffirm', reaffirm);
 });
 
-test('concurrent returns, reaffirmations and retries serialize without duplicate evidence', async () => {
-  const f = await attendanceFixture();
-  await expectStatus(204, f.path, f.submit());
-  const path = participantPath(f);
-  const returns = await Promise.all([request(path + '/return', returnRequest(f)),
-    request(path + '/return', { ...returnRequest(f), access: sessions.raceAdmin.accessToken })]);
-  assert.deepEqual(returns.map(row => row.status).sort(), [204, 409]);
-  const revision = (await historyRead(f)).items[0];
-  const reaffirm = { ...f.submit(), body: { expectedScheduleRevision: f.session.revision,
-    expectedRevision: 1, reviewedReturnId: revision.reviewDecision.id, outcome: 'ATTENDED' } };
-  const attempts = await Promise.all([request(path + '/reaffirm', reaffirm), request(path + '/reaffirm', reaffirm),
-    request(path + '/reaffirm', { ...reaffirm, key: randomUUID() }), request(path + '/return', returnRequest(f))]);
-  assert.deepEqual(attempts.map(row => row.status).sort(), [204, 204, 409, 409]);
-  assert.equal(await migrator.attendanceRevision.count({ where: { bookingId: f.confirmed.id } }), 2);
-  assert.equal(await migrator.attendanceReviewDecision.count({ where: { revisionId: revision.id } }), 1);
-  const latest = (await historyRead(f)).items[0];
-  assert.equal(latest.revision, 2);
-  assert.equal(latest.reviewDecision, null);
+test('concurrent returns, reaffirmations and retries serialize without duplicate evidence', async t => {
+  for (const winner of ['shared', 'competing']) {
+    const f = await attendanceFixture();
+    await expectStatus(204, f.path, f.submit());
+    const path = participantPath(f);
+    const returns = await Promise.all([request(path + '/return', returnRequest(f)),
+      request(path + '/return', { ...returnRequest(f), access: sessions.raceAdmin.accessToken })]);
+    assert.deepEqual(returns.map(row => row.status).sort(), [204, 409]);
+    const revision = (await historyRead(f)).items[0];
+    const reaffirm = { ...f.submit(), body: { expectedScheduleRevision: f.session.revision,
+      expectedRevision: 1, reviewedReturnId: revision.reviewDecision.id, outcome: 'ATTENDED' } };
+    const competing = { ...reaffirm, key: randomUUID() };
+    const intents = [reaffirm, reaffirm, competing, returnRequest(f)];
+    const paths = [path + '/reaffirm', path + '/reaffirm', path + '/reaffirm', path + '/return'];
+    const pending = [];
+    try {
+      await migrator.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM scheduled_session WHERE id = ${f.session.id}::uuid FOR UPDATE`;
+        const first = winner === 'shared' ? 0 : 2;
+        pending[first] = request(paths[first], intents[first]);
+        await waitForBookingLock('FROM scheduled_session WHERE id', 1);
+        for (let i = 0; i < intents.length; i++) {
+          if (i !== first) pending[i] = request(paths[i], intents[i]);
+        }
+        // Promise.all launch order does not determine which distinct key wins.
+        // Queue each winner explicitly; its identical-key retry waits on the key claim.
+        await waitForBookingLock('FROM scheduled_session WHERE id', 3);
+      });
+    } finally { await Promise.all(pending); }
+    const attempts = await Promise.all(pending);
+    const expected = winner === 'shared' ? [204, 204, 409, 409] : [409, 409, 204, 409];
+    assert.deepEqual(attempts.map(row => row.status), expected, winner + ' key wins');
+    for (const response of attempts) {
+      if (response.status === 409) assert.equal((await response.json()).code, 'ATTENDANCE_REVISION_STALE');
+    }
+    const winningIntent = winner === 'shared' ? reaffirm : competing;
+    const replays = await Promise.all([request(path + '/reaffirm', winningIntent), request(path + '/reaffirm', winningIntent)]);
+    assert.deepEqual(replays.map(row => row.status), [204, 204], 'concurrent retries replay the committed winner');
+    assert.deepEqual(await migrator.idempotencyKey.findMany({
+      where: { actorId: f.assigned.id, operation: 'attendance.reaffirm', key: { in: [reaffirm.key, competing.key] } },
+      select: { key: true, resultStatus: true },
+    }), [{ key: winningIntent.key, resultStatus: 204 }], 'losing commands leave no successful idempotency claim');
+    assert.equal(await migrator.attendanceRevision.count({ where: { bookingId: f.confirmed.id } }), 2);
+    assert.equal(await migrator.attendanceReviewDecision.count({ where: { revisionId: revision.id } }), 1);
+    const latest = (await historyRead(f)).items[0];
+    assert.equal(latest.revision, 2);
+    assert.equal(latest.reviewDecision, null);
+    assert.equal(await migrator.auditLog.count({ where: { action: 'ATTENDANCE_REAFFIRMED', targetId: latest.id } }), 1);
+    t.diagnostic(winner + ' key wins: ' + JSON.stringify(expected) + '; winning-key retries: [204,204]');
+  }
 });
 
 for (const cancelled of ['booking', 'session']) {
