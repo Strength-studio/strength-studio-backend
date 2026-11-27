@@ -2,8 +2,13 @@
 
 Milestone 0 ended with the documentation corrections. The owner subsequently authorized Milestone 1 Foundation. Initial production go-live remains pending under O-14.
 
-For the source-inspected status at commit `62f8043` and the proposed next complete
-business journeys, use the [23 November application inventory and vertical slices](milestone-3-next-slices.md).
+For current execution status at merged `main` commit `1fb9c22` on 27 November
+2026, use the [execution checkpoint and application inventory](milestone-3-next-slices.md).
+S1-A Admin commercial operations and S1-B1 Admin Client profile maintenance are
+completed and merged. The [S1-B1 post-merge report](s1b1-post-merge-verification.md)
+records baseline parity, verification evidence and the recommended next task:
+S2 / O-02 onboarding decision closure and contract review, before implementation.
+Development completion does not establish Usage Testing Ready or Production Ready.
 The table below remains the broader milestone sequence, not a claim that every
 listed capability is already implemented. The [current technical report](milestone-3-technical-readiness.md)
 and [pending O-09 owner brief](milestone-3-o09-owner-decision-brief.md) separate
@@ -20,7 +25,7 @@ verification evidence, outstanding decisions and future implementation authority
 
 Proposed repository layout after foundation approval: `apps/backend`, `apps/dashboard`, `apps/mobile`, `packages/api-contract`, `infra`, and `docs`. Use a pnpm TypeScript workspace and native Flutter tooling. Keep Prisma and domain rules inside the backend. Local and production environments remain separate.
 
-Client Management Slice 1 implements the authorized directory, detail, and Client own-profile reads on the Foundation schema. The dashboard includes the directory and detail views. Client profile writes and onboarding are later work. O-02 still gates onboarding. [Implemented API contract](api-contract.md#implemented-client-reads)
+Client Management Slice 1 implements the authorized directory, detail, and Client own-profile reads on the Foundation schema. The dashboard includes the directory and detail views. S1-B1 adds Admin-only display-name editing and explicit account disablement using the existing workflow; it is completed and merged through PR #5. Creation, setup, recovery and reactivation remain excluded/gated under O-02. [Read contract](api-contract.md#implemented-client-reads) and [maintenance contract](api-contract.md#s1-b1-admin-client-profile-maintenance).
 
 Booking Management Slice 1 adds an Admin workspace for booking against the selected Client membership and a scheduled session. PostgreSQL booking commands lock the membership before the scheduled session and recheck both limits. The booking table has restrictive references, column-scoped writes, and a partial unique index for pending and confirmed bookings. Booking history uses the existing append-only audit. [Implemented API contract](api-contract.md#implemented-booking-management-slice-1)
 

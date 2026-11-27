@@ -1,11 +1,45 @@
 # Application inventory and proposed next vertical slices
 
-Inspected 23 November 2026 at published commit
-`62f8043433bcda4789efc879f4da9d8f94aafac5`. This is a **proposed roadmap and ledger
-design for review**, not authorization to implement the next slice. The current
-increment is synchronization, verification/reliability and documentation only.
+Originally inspected 23 November 2026 at published commit
+`62f8043433bcda4789efc879f4da9d8f94aafac5`; execution status and affected inventory
+updated 27 November 2026 against merged `main`
+`1fb9c220a4f234f3eb21d87019376b95b7635c7a`. Future slices and ledger design remain
+**proposals for review**, not authorization to implement. This checkpoint is
+post-merge verification, documentation and planning only.
 O-09 proposals remain pending in the [owner brief](milestone-3-o09-owner-decision-brief.md).
 The [technical report](milestone-3-technical-readiness.md) records actual work/results.
+
+## Execution checkpoint — 27 November 2026
+
+This section tracks current execution within the existing roadmap; the older
+technical/consolidation reports retain their dated evidence. See the
+[post-merge report](s1b1-post-merge-verification.md) for verification and the next-task contract.
+
+| Slice / capability | Current development status | Remaining boundary |
+|---|---|---|
+| Foundation, catalog, Client reads, acceptance/funding/activation, scheduling/booking | Implemented and integrated into `main` | These are bounded slices, not completion of every M1–M4 feature. |
+| Coach attendance submission, Admin return, Coach ATTENDED reaffirmation | Implemented and integrated | Test-only capture gate; no Admin verification or entitlement debit. |
+| S1-A — Admin positive-price commercial operations | COMPLETED — MERGED INTO MAIN, PR #4, baseline `8d2803155b1ead4b9063efa412e04b2c331c4a05` | `/commercial` completes the positive-price journey. SAR 0 issuance API exists, but its entry UI remains outside S1-A. |
+| S1-B1 — Admin Client profile maintenance | **COMPLETED — MERGED INTO MAIN**, [PR #5](https://github.com/Strength-studio/strength-studio-backend/pull/5), 27 November 2026 | Admin display-name edit and explicit existing account disablement only; onboarding/reactivation remain excluded. |
+| S2 / S3 — Client onboarding and Staff/Coach provisioning | Blocked pending O-02 decisions and reviewed contracts | Recommended next task is S2 / O-02 decision closure, not implementation. |
+| S4 / S5 — Membership lifecycle / verified attendance and usage | Not implemented; dependent policy/design gates open | O-07 transitions, O-08 affected bookings, O-09-A/B/C/E and approved canonical ledger/reconciliation design. |
+| S6 / S7 — Installments / financial correction, credit and refunds | Not implemented; contract/policy gates open | O-01/O-03/O-04/O-05/O-07/O-17 as applicable. |
+| S8 — Inbox and delivery | Not implemented; O-09-D/O-11 gated | Recipient/category, sender, transport and failure operations remain unresolved. |
+| S9 / S10 — Client / Coach Flutter interfaces | Not implemented | Mobile source is a placeholder; approved backend policies and interface scope required. |
+| S11 — Operational reporting and release evidence | Individual pages exist; wider reporting/release work remains | Source contracts, retention, O-11–O-14 operations and separate go-live approval. |
+
+S1-B1 merge: `1fb9c220a4f234f3eb21d87019376b95b7635c7a`; reviewed feature:
+`4630462f807a9e729e66c0d338d752eb9b1c56ee`. Squash and feature trees match exactly.
+Foundation CI passed on the merge; this checkpoint reran 11 database-free unit
+tests and inspected existing integration/browser evidence. Production migration
+remains unapplied under the recorded task history; deployment remains unauthorized
+and was not performed. No production environment was inspected.
+
+**Readiness:** These completed development slices do not establish **Usage Testing
+Ready** for the full platform; an approved bounded test journey, environment,
+fixtures and acceptance review remain necessary. **Production Ready is not
+established**: onboarding, attendance/ledger, delivery, retention and operational
+release gates remain. No new implementation is in progress in this checkpoint.
 
 ## Evidence-based application inventory
 
@@ -15,9 +49,9 @@ baselines; current source, schema, tests and bound routes determine this invento
 
 | Area | Implemented evidence | Partial, absent or blocked |
 |---|---|---|
-| Client management/onboarding | `src/clients`: paginated directory, profile and Client own-profile reads; dashboard directory/detail. Active verified-account login and refresh in `src/identity`. | Client creation/invitation, self-registration, verification and recovery routes remain O-02-gated stubs. No profile write workflow. |
+| Client management/onboarding | `src/clients`: paginated directory, profile and Client own-profile reads; dashboard directory/detail, Admin-only display-name editing and explicit existing account disablement (S1-B1). Active verified-account login and refresh in `src/identity`. | Client creation/invitation, self-registration, verification and recovery routes remain O-02-gated stubs. No reactivation or expanded Staff write authority. |
 | Packages/Memberships | `src/catalog`, package/version/session-type models and dashboard CRUD/history; frozen purchased terms; concurrent Memberships with no per-client single-active constraint. | Private offers, pricing composition and wider lifecycle work remain separate. No general Membership-management dashboard. |
-| Activation/payment/installments | Purchase acceptance APIs with agreement evidence and positive-price/SAR 0 paths; `src/payments` record/Admin verify/allocate; purchase funding lookup and explicit Admin activation UI. | Current activation is activation-date based; future-effective starts, extensions, suspension and termination are not implemented. No installment, client-credit, refund or receivable models. Purchase/payment entry is not yet an end-to-end dashboard journey. Staff acceptance/delegated verification are not enabled by the existing action map. |
+| Activation/payment/installments | Purchase acceptance APIs with agreement evidence and positive-price/SAR 0 paths; `src/payments` record/Admin verify/allocate; funding/activation UI. S1-A `/commercial` supplies the Admin positive-price entry-to-explicit-activation journey and scoped audit history. | No SAR 0 entry UI in S1-A. Activation remains activation-date based; future-effective starts, extensions, suspension and termination are not implemented. No installment, client-credit, refund or receivable models. Staff acceptance/delegated verification are not enabled by the existing action map. |
 | Coach management/assignment | Coach profiles and active-Coach picker; Admin manually assigns and reassigns scheduled sessions, with overlap checks; Coach own-session reads. | No operational Coach provisioning/profile/availability-request workflow. Manual assignment exists; do not rebuild it as automatic matching. |
 | Booking/scheduling | `src/bookings`, `src/scheduling`, dashboard workspaces; exact Membership selection; Admin pending/approve/reject/cancel; capacity and Membership commitment locks; session revision/conflict checks. | No Client self-booking, waitlist, timed holds or rescheduling-request workflow. Confirmed commitments include past non-cancelled Bookings; they are not consumed-unit postings. |
 | Attendance | `src/attendance`: assigned-Coach ATTENDED submission, Admin per-participant return, exact-reason acknowledgment/reaffirmation, paginated immutable history, dashboard and OpenAPI. | Production-gated; no acceptance/verification, alternative outcomes, editable details or debit. O-09-A–G remain relevant. |
@@ -30,7 +64,8 @@ baselines; current source, schema, tests and bound routes determine this invento
 | Coach mobile | Backend own-session/attendance contracts can be reused. | No Flutter Coach schedule, roster, return or reaffirmation UI exists. No commission or unrelated financial API may be added for Coach convenience. |
 
 Evidence roots: `apps/backend/src/app.ts`, controllers/services and action map;
-`apps/backend/prisma/schema.prisma` and all 15 migrations; dashboard route/relay
+`apps/backend/prisma/schema.prisma` and its ordered migrations (including the
+narrow S1-B1 profile-maintenance migration); dashboard route/relay
 implementations and integration/browser tests; mobile README; and
 [implemented API contracts](api-contract.md). No production records were inspected.
 
@@ -58,9 +93,12 @@ manual receipt, verifies it, explicitly allocates it to the purchase, then
 separately confirms activation. Include SAR 0 issuance and the existing reasoned
 partial-funding activation behavior. Never activate when a payment is recorded.
 
-**Current status:** Most backend operations already exist; dashboard entry and
-navigation across them are missing. This is the recommended next product slice
-that can use approved behavior while O-09 is pending.
+**Current status:** S1-A is completed and merged through PR #4 for the positive-price
+Admin journey, with `/commercial`, secure relay, scoped audit and regression tests.
+S1-B1 is completed and merged through PR #5 for existing Client maintenance. The
+broader original S1 proposal also included SAR 0 entry UI; that remains future
+scope and is not claimed complete by S1-A. The primary next recommendation is
+S2 / O-02 decision closure and contract review; no next-slice implementation is authorized.
 
 **Layers/contracts:** Reuse existing purchase, payment, funding and activation
 DTOs/endpoints in [the API contract](api-contract.md). Backend additions only if
