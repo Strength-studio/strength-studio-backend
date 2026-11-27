@@ -13,7 +13,7 @@
     "seed:local": "node --env-file=.env apps/backend/dist/local-seed.js",
     "openapi": "pnpm --filter @strength-studio/backend openapi",
     "test:unit": "pnpm --filter @strength-studio/backend test:unit",
-    "test:integration": "node --env-file=.env --test apps/backend/test/foundation.integration.test.cjs",
+    "test:integration": "node --env-file=.env --test --test-concurrency=1 apps/backend/test/*.integration.test.cjs",
     "verify": "pnpm db:generate && pnpm build && pnpm test:unit && pnpm test:integration",
     "dev:dashboard": "node apps/dashboard/local-dev.cjs dev apps/dashboard --hostname 127.0.0.1 --port 3001"
   }

@@ -68,6 +68,15 @@ enum TokenPurpose {
 }
 
 enum AuditAction {
+  CLIENT_INVITED
+  SETUP_LINK_REISSUED
+  ONBOARDING_REVOKED
+  SETUP_LINK_CONSUMED
+  EMAIL_CHALLENGE_ISSUED
+  EMAIL_VERIFIED
+  PASSWORD_SETUP_COMPLETED
+  ACCOUNT_ENABLED
+  ONBOARDING_REJECTED
   CLIENT_PROFILE_UPDATED
   ACCOUNT_DISABLED
   STAFF_GRANT_CHANGED
@@ -101,6 +110,7 @@ enum AuditAction {
 }
 
 enum AuditTarget {
+  ONBOARDING_REQUEST
   USER
   STAFF_GRANT
   AUTH_SESSION
@@ -128,6 +138,8 @@ model User {
   accountState    AccountState   @map("account_state")
   passwordHash    String?        @map("password_hash")
   emailVerifiedAt DateTime?      @map("email_verified_at") @db.Timestamptz(6)
+  onboarding      ClientOnboarding? @relation("OnboardedUser")
+  initiatedOnboarding ClientOnboarding[] @relation("OnboardingAdmin")
   client          ClientProfile?
   coach           CoachProfile?
   grants          StaffGrant[]   @relation("Staff")
@@ -626,4 +638,59 @@ model PaymentAllocation {
   @@index([purchaseId])
   @@index([allocatedById])
   @@map("payment_allocation")
+}
+
+
+enum OnboardingPurpose {
+  SETUP
+  EMAIL
+  PASSWORD
+  @@map("onboarding_purpose")
+}
+
+model ClientOnboarding {
+  userId String @id @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy String @map("created_by") @db.Uuid
+  revision Int @default(1)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+  user User @relation("OnboardedUser", fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  admin User @relation("OnboardingAdmin", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  challenges OnboardingChallenge[]
+  @@index([createdBy])
+  @@map("client_onboarding")
+}
+
+model OnboardingChallenge {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  userId String @map("user_id") @db.Uuid
+  purpose OnboardingPurpose
+  revision Int
+  replacement Boolean @default(false)
+  digest String @unique
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  onboarding ClientOnboarding @relation(fields: [userId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
+  delivery OnboardingDelivery?
+  @@index([userId, purpose, createdAt])
+  @@map("onboarding_challenge")
+}
+
+model OnboardingDelivery {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  challengeId String @unique @map("challenge_id") @db.Uuid
+  ciphertext String?
+  attempts Int @default(0)
+  availableAt DateTime @default(now()) @map("available_at") @db.Timestamptz(6)
+  leaseId String? @map("lease_id") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(6)
+  acceptedAt DateTime? @map("accepted_at") @db.Timestamptz(6)
+  failedAt DateTime? @map("failed_at") @db.Timestamptz(6)
+  challenge OnboardingChallenge @relation(fields: [challengeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  @@index([availableAt, leaseUntil])
+  @@map("onboarding_delivery")
 }

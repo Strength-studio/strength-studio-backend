@@ -4,6 +4,7 @@ import { clientRoute, readClientRoute } from '../../../lib/client-relay';
 import { accessCookie, api } from '../../../lib/session';
 import { Icon } from '../../catalog/ui';
 import { ClientReadError, ClientWorkspace } from '../ui';
+import { OnboardingAdmin } from '../onboarding-admin';
 import { ClientProfileEditor } from '../profile-editor';
 
 export const metadata = { title: 'Client profile | Strength Studio', referrer: 'no-referrer' };
@@ -22,5 +23,6 @@ export default async function ClientProfile({ params }: { params: Promise<{ id: 
   return <ClientWorkspace detail>
     <Link className="button quiet back" href="/clients" prefetch={false}><Icon name="back" /> Back to clients</Link>
     <ClientProfileEditor key={client.id + ':' + account.id} initial={client} actorId={account.id} admin={account.role === 'ADMIN'} />
+    {account.role === 'ADMIN' && <OnboardingAdmin key={'onboarding:' + client.id + ':' + account.id} actorId={account.id} clientId={client.id} />}
   </ClientWorkspace>;
 }

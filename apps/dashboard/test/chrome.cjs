@@ -80,8 +80,8 @@ async function withChrome(origin, clientMarker, run) {
       socket.send(JSON.stringify({ id, method, params }));
     });
 
-    async function evaluate(expression) {
-      const result = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    async function evaluate(expression, { userGesture = false } = {}) {
+      const result = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture });
       if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? 'Browser evaluation failed');
       return result.result.value;
     }

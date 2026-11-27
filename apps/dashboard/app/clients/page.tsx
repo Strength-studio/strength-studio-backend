@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { clientQuery, readClientRoute, clientStates } from '../../lib/client-relay';
-import { accessCookie } from '../../lib/session';
+import { api, accessCookie } from '../../lib/session';
 import { dateTime } from '../../lib/catalog';
 import { Icon } from '../catalog/ui';
 import { ClientReadError, ClientStateBadge, ClientWorkspace, stateLabels } from './ui';
@@ -29,13 +29,15 @@ export default async function ClientDirectory({ searchParams }: {
   if (!result.ok) return <ClientReadError status={result.status}
     retry={result.status === 400 ? '/clients' : result.status >= 500 ? '/clients?' + query : undefined} />;
   const { items, nextCursor } = result.data;
+  const identity = await api('me', 'GET', { token }).catch(() => null);
+  const admin = identity?.ok && (await identity.json()).role === 'ADMIN';
   const firstPage = new URLSearchParams(query);
   firstPage.delete('after');
   const nextPage = new URLSearchParams(firstPage);
   if (nextCursor) nextPage.set('after', nextCursor);
 
   return <ClientWorkspace>
-    <header className="section-heading"><div><h1>Clients</h1></div></header>
+    <header className="section-heading"><div><h1>Clients</h1></div>{admin && <Link className="button primary" href="/clients/new" prefetch={false}>Invite Client</Link>}</header>
     <section className="panel" aria-labelledby="directory-heading">
       <header className="panel-heading"><h2 id="directory-heading">Client directory</h2></header>
       <form className="filters" action="/clients" method="get">

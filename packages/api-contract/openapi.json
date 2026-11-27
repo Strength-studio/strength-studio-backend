@@ -1,6 +1,357 @@
 {
   "openapi": "3.0.0",
   "paths": {
+    "/api/v1/users/invite": {
+      "post": {
+        "operationId": "OnboardingController_invite",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "403": {
+            "description": ""
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Admin creates a Client and discloses its manual setup link once",
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
+    "/api/v1/clients/{id}/onboarding": {
+      "get": {
+        "operationId": "OnboardingController_status",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingStatusDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "403": {
+            "description": ""
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
+    "/api/v1/users/{id}/onboarding/reissue": {
+      "post": {
+        "operationId": "OnboardingController_reissue",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingCommandDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
+    "/api/v1/users/{id}/onboarding/revoke": {
+      "post": {
+        "operationId": "OnboardingController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingCommandDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
+    "/api/v1/auth/accept-invitation": {
+      "post": {
+        "operationId": "OnboardingController_accept",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProofDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
+    "/api/v1/auth/verify-email": {
+      "post": {
+        "operationId": "OnboardingController_verify",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProofDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordAuthorizationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
+    "/api/v1/auth/setup-password": {
+      "post": {
+        "operationId": "OnboardingController_password",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSetupDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
+    "/api/v1/auth/resend-verification": {
+      "post": {
+        "operationId": "OnboardingController_resend",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendProofDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_INPUT or CHALLENGE_INVALID_OR_EXPIRED"
+          },
+          "409": {
+            "description": "CLIENT_IDENTITY_CONFLICT, ONBOARDING_CHANGED, ONBOARDING_NOT_ELIGIBLE, ONBOARDING_RATE_LIMITED or idempotency conflict"
+          }
+        },
+        "tags": [
+          "Client onboarding"
+        ]
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "HealthController_liveness",
@@ -148,20 +499,6 @@
         ]
       }
     },
-    "/api/v1/auth/verify-email": {
-      "post": {
-        "operationId": "AuthController_verifyEmail",
-        "parameters": [],
-        "responses": {
-          "409": {
-            "description": "Onboarding policy pending (O-02)"
-          }
-        },
-        "tags": [
-          "Identity"
-        ]
-      }
-    },
     "/api/v1/auth/reset-password": {
       "post": {
         "operationId": "AuthController_resetPassword",
@@ -211,35 +548,6 @@
         "responses": {
           "200": {
             "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "tags": [
-          "Accounts"
-        ]
-      }
-    },
-    "/api/v1/users/invite": {
-      "post": {
-        "operationId": "AccountsController_invite",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/InviteClientDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "409": {
-            "description": "Client-only invitation is gated by O-02"
           }
         },
         "security": [
@@ -3121,6 +3429,192 @@
       }
     },
     "schemas": {
+      "InviteDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "email",
+          "displayName"
+        ]
+      },
+      "InvitationDto": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "challengeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "linkAvailable": {
+            "type": "boolean"
+          },
+          "setupLink": {
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "clientId",
+          "challengeId",
+          "expiresAt",
+          "linkAvailable"
+        ]
+      },
+      "OnboardingStatusDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "NOT_STARTED",
+              "INVITED",
+              "VERIFY_EMAIL",
+              "SET_PASSWORD",
+              "COMPLETED",
+              "REVOKED",
+              "DISABLED"
+            ]
+          },
+          "revision": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "canReissueAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "delivery": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "QUEUED",
+              "ACCEPTED",
+              "FAILED",
+              null
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "OnboardingCommandDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ]
+      },
+      "ProofDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "writeOnly": true,
+            "minLength": 43,
+            "maxLength": 43
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "AcceptedDto": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ]
+      },
+      "PasswordAuthorizationDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expiresAt"
+        ]
+      },
+      "PasswordSetupDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "writeOnly": true,
+            "minLength": 43,
+            "maxLength": 43
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true,
+            "minLength": 12,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ]
+      },
+      "ResendProofDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
       "LoginDto": {
         "type": "object",
         "properties": {
@@ -3185,24 +3679,6 @@
             "writeOnly": true
           }
         }
-      },
-      "InviteClientDto": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "format": "email",
-            "maxLength": 254
-          },
-          "displayName": {
-            "type": "string",
-            "maxLength": 120
-          }
-        },
-        "required": [
-          "email",
-          "displayName"
-        ]
       },
       "GrantDto": {
         "type": "object",

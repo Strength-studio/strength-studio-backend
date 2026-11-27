@@ -222,10 +222,10 @@ test('client and coach cannot access another account; staff grants remain indepe
   await expectStatus(404, `/users/${users.coach.id}`, { access: sessions.staff.accessToken });
   await expectStatus(403, '/studio-settings', { access: sessions.staff.accessToken });
   await expectStatus(403, `/memberships/${randomUUID()}/activate`, { method: 'POST', access: sessions.staff.accessToken });
-  await expectStatus(400, '/users/invite', { method: 'POST', access: sessions.staff.accessToken,
+  await expectStatus(400, '/users/invite', { method: 'POST', access: sessions.admin.accessToken,
     body: { email: 'invite@studio.example', displayName: 'Invite', role: 'ADMIN', grants: ['payment.verify'] } });
-  assert.equal((await expectStatus(409, '/users/invite', { method: 'POST', access: sessions.staff.accessToken,
-    body: { email: 'invite@studio.example', displayName: 'Invite' } })).code, 'ONBOARDING_POLICY_PENDING');
+  assert.equal((await expectStatus(403, '/users/invite', { method: 'POST', access: sessions.staff.accessToken,
+    body: { email: 'invite@studio.example', displayName: 'Invite' } })).code, 'FORBIDDEN');
   assert.equal(await migrator.user.count({ where: { normalizedEmail: 'invite@studio.example' } }), 0);
 });
 

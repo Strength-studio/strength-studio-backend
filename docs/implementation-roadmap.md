@@ -43,3 +43,14 @@ The [original audit](milestone-0-final-readiness-audit.md) is retained as the pr
 | A06 | [Private database and data-path boundaries](permission-matrix.md#commission-isolation) with tests scheduled in the Foundation and reporting gates above. |
 
 The Foundation recommendation was based on a documentation cross-check. The owner has authorized Foundation. [Open studio decisions](open-decisions.md) still gate their affected workflows. The audit's later-workflow findings remain open. See [local setup and verification](../README.md) for the implementation scope and test commands.
+
+
+## S2-A local implementation — 27 November 2026
+
+Following explicit owner implementation authorization, S2-A Admin Client onboarding
+is implemented and verified locally: manual setup-link disclosure, separate email
+proof, password setup and automatic account access independent of Membership/payment.
+It remains uncommitted and uses isolated fake transport; no real email provider or
+production operation is enabled. [Current execution checkpoint](milestone-3-next-slices.md#s2-a-authorized-implementation-checkpoint--27-november-2026)
+and [implementation/test/rollback report](s2a-onboarding-implementation.md) distinguish
+this delivery from remaining S2 and production gates. The next step is owner review.

@@ -1945,9 +1945,11 @@ test('S1-B1 relay protects origin, CSRF, current Admin identity, strict payloads
   for (const method of ['GET', 'HEAD', 'OPTIONS', 'PATCH', 'PUT', 'DELETE']) {
     await relay(admin, 405, 'users/' + target.id + '/disable', { method, allow: 'POST' });
   }
-  for (const path of ['users', 'users/' + target.id, 'users/invite', 'clients/' + target.id + '/activate']) {
+  for (const path of ['users', 'users/' + target.id, 'clients/' + target.id + '/activate']) {
     await relay(admin, 404, path, { method: 'POST', payload: {} });
   }
+  // S2-A enables this route; missing actor binding must still deny it.
+  await relay(admin, 403, 'users/invite', { method: 'POST', payload: {} });
   await relay(admin, 204, 'users/' + target.id + '/disable', disable);
   await relay(admin, 204, 'users/' + target.id + '/disable', disable);
   assert.equal((await relay(admin, 200, path)).accountState, 'DISABLED');
@@ -2081,7 +2083,7 @@ test('S1-B1 draft in Chrome preserves dirty input and its original stale-edit pr
     assert.deepEqual(await browser.evaluate('window.profileWrites'), [{ displayName: 'Unsaved Admin draft', expectedDisplayName: 'Profile maintenance fixture' }]);
     const conflictReads = await browser.evaluate('window.profileReads');
     await browser.evaluate(`dispatchEvent(new Event('focus'));true`);
-    await browser.until(`window.profileReads>${conflictReads} && document.querySelector('[data-client-profile][aria-busy="false"]') && !document.querySelector('[role=status]')`, 'conflicted draft revalidated');
+    await browser.until(`window.profileReads>${conflictReads} && document.querySelector('[data-client-profile][aria-busy="false"]') && !document.querySelector('[data-client-profile] [role=status]')`, 'conflicted draft revalidated');
     assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').value`), 'Unsaved Admin draft');
     assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').disabled`), true);
     assert.match(await browser.evaluate(`document.querySelector('[role=alert]').textContent`), /This profile changed/);

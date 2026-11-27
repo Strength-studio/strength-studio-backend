@@ -16,6 +16,24 @@ Updated 10 November 2026. Business approval comes from the project owner’s con
 
 **Implementation dependencies.** Define verified/active state transitions, registration policy checks, purpose-bound single-use invite/verification/reset tokens, collision and abuse handling, session revocation and recovery audit. Foundation already checks current grants and verified active accounts and provides audited Admin grant changes. Registration, invitation, verification and recovery are still stubs.
 
+
+### S2-A implementation checkpoint — 27 November 2026
+
+The owner explicitly authorized direct bounded S2-A implementation after the
+B1–B5 review. Admin-only Client creation/manual-link disclosure, reissue/revoke,
+separate emailed proof and separate password setup with automatic ACTIVE access
+are implemented locally and verified with isolated fake transport. No Staff grants
+were expanded; former invitation-stub authority was explicitly reconciled.
+Approved 24-hour SETUP/EMAIL, 60-second cooldown and five replacements per recipient/
+purpose/hour remain unchanged. Password authorization (15 minutes), setup password
+12–256 and the implementation's queue/privilege/serialization choices are technical
+decisions under that authority, not a rewrite of broader O-02 policy.
+See [implemented contract](api-contract.md#implemented-s2-a-admin-client-onboarding)
+and [verification/rollback report](s2a-onboarding-implementation.md). Self-signup,
+recovery, identity repair/reactivation and production Admin bootstrap remain gated.
+Real sender/provider activation and operations remain unconfigured/unauthorized.
+Implementation is uncommitted; no production migration/deployment occurred.
+
 ## O-03
 
 **Approved — payment authority.** Admin or individually authorized Staff may record payments. Specifically authorized Staff may perform initial verification, which always needs subsequent Admin review and authorization. The same Admin may record, verify and authorize a payment. Record, verify and authorize remain distinct events and statuses. Preserve recorder, verifier, reviewer and authorizer and their timestamps. Recording alone never means verification or authorization.

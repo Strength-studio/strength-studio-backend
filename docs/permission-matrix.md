@@ -8,7 +8,7 @@ This is the canonical action and resource map for the [API contract](api-contrac
 - **Staff** can act only through the listed grant on eligible records in the single studio. Validate the full target relationship, including the parent purchase, booking, or attendance record. If an approved restriction cannot be enforced, deny the action. There is no implicit grant through another action or role.
 - **Coach** can read their own availability and assigned schedule. Participant and attendance access requires the coach's assignment to that session. Historical attendance uses the served reservation. Return only the client information needed for that assignment.
 - **Client** can read or act on their own records. Resolve ownership through the client profile and the related purchase, finance account, membership, or booking. Published public offers and eligible slot listings use dedicated views. Private offers require the matching client. Apply the same scope to lists, details, exports, and notification reads.
-- **Invitations** through the client invitation action create only Client accounts. The server sets the role. Reject role and grant fields in the request. Coach or Staff account management is a separate Admin action. Email verification and Admin-controlled self-registration are approved. Account enablement and initial Admin bootstrap remain gated by [O-02/O-14](open-decisions.md).
+- **Invitations** through Admin-only `user.manage` in S2-A create only Client accounts. Staff `client.manage` retains existing reads and confers no onboarding write. The server sets the role. Reject role and grant fields in the request. Coach or Staff account management is a separate Admin action. Email verification and Admin-controlled self-registration are approved. S2-A account enablement is implemented for Admin-invited Clients. Self-registration and initial Admin bootstrap remain gated by [O-02/O-14](open-decisions.md).
 
 | Action | Admin | Staff grant | Coach | Client |
 |---|---|---|---|---|
@@ -83,3 +83,15 @@ The Foundation test plan must exercise role and grant denial and negative DB pri
 | Disable existing Client account access | Existing `user.manage`, Admin only | No | No | No |
 
 New display-name writes use independent operation `client.profile.update` within the existing transactional command/idempotency system. They do not extend Staff grants or expose commission/financial data. Existing Admin account-disable semantics remain unchanged. Creation, setup, verification, reactivation and delegated Staff mutations are outside S1-B1; O-02 remains unresolved for onboarding.
+
+
+## Implemented S2-A onboarding boundary
+
+Admin-only `user.manage` now binds invitation creation, reissue, revoke and the
+secret-free onboarding status projection. This explicitly replaces the former
+`client.manage` invitation stub binding under owner approval; existing Staff
+directory/detail reads and grant rows are unchanged. Neither Staff, Coach nor
+Client can manage invitations or obtain an Admin disclosure. Public endpoints
+consume only exact-stage onboarding capabilities and never grant arbitrary role,
+identity linking, account reactivation or pre-ACTIVE sessions. S1-B1 display-name
+and disablement behavior remains independent. See [implemented contracts](api-contract.md#implemented-s2-a-admin-client-onboarding).

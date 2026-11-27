@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { onboardingRelay, onboardingRoute } from '../../../../../lib/onboarding-relay';
 import { attendanceHistoryResponse, attendanceQuery, attendanceResponse, attendanceRoute } from '../../../../../lib/attendance';
 import { bookingQuery, bookingResponse, bookingRoute, isBookingPath } from '../../../../../lib/bookings';
 import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute } from '../../../../../lib/catalog-relay';
@@ -41,6 +42,7 @@ function rejectedAttendanceRequest(parts: string[]) {
 
 async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST' | 'PATCH') {
   const { path: parts } = await route.params;
+  if (onboardingRoute(request.method, parts)) return onboardingRelay(request, parts);
   if (clientWriteRoute(request.method, parts) || parts[0] === 'users') return clientWriteRelay(request, parts);
   if (parts[0] === 'purchases' && parts[1] === 'positive-price') return commercialRelay(request, parts);
   if (parts[0] === 'payments') return commercialRelay(request, parts);

@@ -106,6 +106,35 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
 
 - Production-gated attendance submission, Admin participant return and Coach ATTENDED reaffirmation at `/attendance`, with immutable submission/review history. [Attendance contract and O-09 register](docs/milestone-3-attendance-return-reaffirmation.md).
 
-Real registration, invitation delivery and completion, password recovery, and production Admin bootstrap remain gated by O-02. The legacy membership activation stubs and commission reads remain Admin-only and return `WORKFLOW_NOT_ENABLED`. Production attendance capture remains gated by O-09; Admin attendance verification, full correction and entitlement deduction remain deferred. Private offers, refunds, Redis/BullMQ delivery, SMTP, and production deployment remain deferred.
+S2-A implements Admin invitation/manual-link disclosure, separate email proof and password setup, and automatic account access. Verification email uses an encrypted application-owned queue with an isolated fake transport; no real provider/sender is configured. Self-registration, password recovery and production Admin bootstrap remain gated by O-02. The legacy membership activation stubs and commission reads remain Admin-only and return `WORKFLOW_NOT_ENABLED`. Production attendance capture remains gated by O-09; Admin attendance verification, full correction and entitlement deduction remain deferred. Private offers, refunds, Redis/BullMQ delivery, SMTP, and production deployment remain deferred.
 
 See [the implementation roadmap](docs/implementation-roadmap.md), [API contract](docs/api-contract.md), and [open studio decisions](docs/open-decisions.md).
+
+
+## S2-A Client onboarding
+
+Admin can use `/clients/new` or Invite Client in the directory, then manually share
+the one-time disclosed setup link. Client accepts it, separately proves email, sets
+a password, then signs in. Existing Client profiles show only safe status plus
+explicit reissue/revoke actions. Staff retain reads only. No purchase or Membership
+is required. Duplicate emails never merge or overwrite accounts.
+
+Set a distinct local `ONBOARDING_DELIVERY_KEY` to 32 random bytes encoded as hex
+when configuring an authorized development environment. Never reuse the auth key.
+This key protects temporary queued proof delivery payloads; it does not configure
+SMTP. Default dispatch is paused with no provider. The isolated test harness uses
+`OnboardingDeliveryService.dispatch(new FakeVerificationTransport())`; there is no
+HTTP debug endpoint or verification-token UI. Real transport activation, sender,
+credentials and operations require later authorization. Therefore this delivery is
+not production-ready or a real-email usage-testing claim.
+
+After `pnpm build`, new tests use an already-migrated disposable loopback template:
+
+```sh
+node --env-file=.env --test apps/backend/test/onboarding.integration.test.cjs
+STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket --env-file=.env --test apps/dashboard/test/onboarding.integration.test.cjs
+```
+
+Root `pnpm test:integration` includes Foundation and S2-A. See the
+[API contract](docs/api-contract.md#implemented-s2-a-admin-client-onboarding) and
+[verification/rollback report](docs/s2a-onboarding-implementation.md).

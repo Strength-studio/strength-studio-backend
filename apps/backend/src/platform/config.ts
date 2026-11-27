@@ -1,6 +1,7 @@
 export const CONFIG = Symbol('config');
 
 export interface Config {
+  onboardingKey?: Buffer;
   databaseUrl: string;
   signingKey: Buffer;
   dashboardOrigin?: string;
@@ -32,9 +33,11 @@ export function loadConfig(env = process.env): Config {
       throw new Error('DASHBOARD_ORIGIN must be an exact HTTPS origin or a local development origin');
     }
   }
+  const onboardingKey = env.ONBOARDING_DELIVERY_KEY;
+  if (onboardingKey && !/^[\da-f]{64}$/i.test(onboardingKey)) throw new Error('ONBOARDING_DELIVERY_KEY must be 32 random bytes in hex');
   const port = Number(env.API_PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid API_PORT');
 
-  return { databaseUrl: database.href, signingKey: Buffer.from(key, 'hex'), dashboardOrigin,
+  return { onboardingKey: onboardingKey ? Buffer.from(onboardingKey, 'hex') : undefined, databaseUrl: database.href, signingKey: Buffer.from(key, 'hex'), dashboardOrigin,
     host: env.API_HOST ?? '127.0.0.1', port, socketRecheckMs: 15_000 };
 }

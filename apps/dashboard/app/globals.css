@@ -251,3 +251,14 @@ textarea { resize: vertical; }
 .commercial-workspace { display: grid; gap: 1rem; padding: 1.25rem; min-width: 0; }
 .commercial-workspace > .panel-heading { padding: 0 0 1rem; }
 .commercial-workspace code { overflow-wrap: anywhere; }
+
+/* Client onboarding uses the existing panel, form and button vocabulary. */
+.onboarding-admin { padding: 24px; display: grid; gap: 16px; margin-top: 20px; }
+.onboarding-admin h2, .onboarding-admin p { margin: 0; }
+.onboarding-admin h2 { font-size: 1.25rem; }
+.onboarding-admin form { display: grid; gap: 16px; max-width: 38rem; }
+.onboarding-admin label { display: grid; gap: 8px; font-weight: 600; }
+.onboarding-admin input { width: 100%; min-width: 0; }
+.onboarding-admin .notice { display: grid; gap: 12px; overflow-wrap: anywhere; }
+.onboarding-admin a { overflow-wrap: anywhere; }
+.onboarding-public form { display: grid; gap: 12px; }

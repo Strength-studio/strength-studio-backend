@@ -1,5 +1,7 @@
 # Application inventory and proposed next vertical slices
 
+**Later S2-A implementation:** [Current implementation and verification](s2a-onboarding-implementation.md) supersedes this document's earlier planning-only readiness for the bounded slice. Historical approvals/proposals below are preserved; broader S2 and production gates remain.
+
 Originally inspected 23 November 2026 at published commit
 `62f8043433bcda4789efc879f4da9d8f94aafac5`; execution status and affected inventory
 updated 27 November 2026 against merged `main`
@@ -422,3 +424,19 @@ Read-only source/data-shape design, isolated verification/restore drills and
 technical contract reviews can also be proposed independently. No dependent
 onboarding, ledger, verification, notification or production work starts while its
 required decision or authorization is pending.
+
+
+## S2-A authorized implementation checkpoint — 27 November 2026
+
+S2-A Admin Client onboarding is **IMPLEMENTED LOCALLY — UNCOMMITTED** with isolated
+fake-transport and Chrome verification. This later checkpoint supersedes the
+planning-only readiness above for this bounded slice; it does not complete all S2.
+Admin manual link → separate email proof → password setup → ACTIVE follows the
+approved boundary with no commercial/service effect. [Report and evidence](s2a-onboarding-implementation.md);
+[current API](api-contract.md#implemented-s2-a-admin-client-onboarding).
+
+Self-registration, recovery, non-Client provisioning, identity correction/restart
+and production bootstrap remain deferred. There is no default real email provider
+or scheduled sender; real-email usage/production readiness is not established.
+Next action is owner review of this implementation, not automatic next-feature
+work. Commit/push/PR/migration-to-production/deployment remain separate gates.

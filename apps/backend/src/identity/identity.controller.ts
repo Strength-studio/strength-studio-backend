@@ -7,7 +7,7 @@ import { Commands } from '../platform/commands';
 import { Database, databaseTime } from '../platform/database';
 import { CurrentAccess, failure, Public, RequireAction, StudioRequest } from '../platform/http';
 import { AccessEvents } from './access-events';
-import { ExceptionDto, GrantDto, InviteClientDto, LoginDto, LogoutDto, RefreshDto, TokenPairDto } from './identity.dto';
+import { ExceptionDto, GrantDto, LoginDto, LogoutDto, RefreshDto, TokenPairDto } from './identity.dto';
 import { staffPermissions } from './permissions';
 import { AccessContext, Sessions } from './session.service';
 
@@ -53,13 +53,6 @@ export class AuthController {
     throw failure(409, 'ONBOARDING_POLICY_PENDING');
   }
 
-  @Post('verify-email') @Public()
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiConflictResponse({ description: 'Onboarding policy pending (O-02)' })
-  verifyEmail() {
-    throw failure(409, 'ONBOARDING_POLICY_PENDING');
-  }
-
   @Post('reset-password') @Public()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiConflictResponse({ description: 'Recovery policy pending (O-02)' })
@@ -90,12 +83,6 @@ export class AccountsController {
     });
     if (!target) throw failure(404, 'USER_NOT_FOUND');
     return { id: target.id, email: target.normalizedEmail, role: target.role, accountState: target.accountState };
-  }
-
-  @Post('users/invite') @RequireAction('client.manage')
-  @ApiConflictResponse({ description: 'Client-only invitation is gated by O-02' })
-  invite(@Body() _dto: InviteClientDto) {
-    throw failure(409, 'ONBOARDING_POLICY_PENDING');
   }
 
   @Post('users/:id/disable') @RequireAction('user.manage') @HttpCode(204)

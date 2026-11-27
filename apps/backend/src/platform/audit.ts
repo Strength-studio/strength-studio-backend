@@ -2,7 +2,7 @@ import { AuditAction, AuditTarget, Prisma } from '@prisma/client';
 import { Transaction } from './database';
 
 export async function audit(tx: Transaction, event: {
-  actorId: string; action: AuditAction; targetType: AuditTarget; targetId: string;
+  actorId: string | null; action: AuditAction; targetType: AuditTarget; targetId: string;
   requestId: string; reason?: string; redactedDetails?: Prisma.InputJsonObject;
 }) {
   return tx.auditLog.create({

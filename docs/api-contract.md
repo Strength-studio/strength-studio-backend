@@ -24,7 +24,7 @@ All paths below are relative to `/api/v1`. The named actions are the permission-
 
 | Family | Endpoint and action |
 |---|---|
-| Identity | Public, rate-limited: registration, login, email verification, and reset. Refresh and logout use their respective session credentials. `GET /me` and socket-ticket issuance use `account.self` and require an active session. `POST /users/invite` uses `client.manage` and creates Client only. Reject role and grant fields. Other account administration uses `user.manage`, and `/staff-grants` uses `staff.grant.manage`. |
+| Identity | Public, rate-limited: registration, login, email verification, and reset. Refresh and logout use their respective session credentials. `GET /me` and socket-ticket issuance use `account.self` and require an active session. `POST /users/invite` uses Admin-only `user.manage` and creates Client only; Staff retain existing reads. Reject role and grant fields. Other account administration uses `user.manage`, and `/staff-grants` uses `staff.grant.manage`. |
 | Studio and catalog | Studio settings writes use `studio.configure`. Package and version reads use `catalog.read`. Public management uses `catalog.manage`. Private issuance and management use dedicated `catalog.private.manage` and exact client/version scope. Admin withdrawal of an unaccepted offer requires a reason and a proposed separate action. |
 | Purchases and installments | Client intent uses `purchase.request` and does not accept a purchase. Own in-app terms confirmation records agreement evidence separately. `purchase.read` and `purchase.review` cover scoped reads and intent review. Formal acceptance and recording use proposed dedicated `purchase.accept_record`, requiring evidence, exact eligible version and immutable snapshot. Installments use `finance.read` or `installment.manage`. Admin-only purchase cancellation and installment due-date revisions use separate proposed actions. |
 | Purchase funding | `GET /purchases/{purchaseId}/funding` uses Admin-only `purchase.funding.read`. |
@@ -188,7 +188,7 @@ References: [OWASP CSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets
 
 The API exposes liveness and PostgreSQL readiness, sign-in and token operations, scoped account reads, non-Admin disablement, staff grant changes, and studio settings. The dashboard relay allows `GET /me`, `POST /auth/socket-ticket` and the catalog routes above. It keeps tokens in host-only cookies and binds its CSRF header to the current refresh credential. Foundation technical defaults are five-minute access tokens, a seven-day absolute refresh session, and 30-second single-use socket tickets.
 
-The invitation, registration, verification, and recovery routes return `ONBOARDING_POLICY_PENDING` for permitted requests. Ordinary activation, the separate Admin exception, and commission reads return `WORKFLOW_NOT_ENABLED` after authorization and input checks. The API rejects new Staff activation grants and denies both stubs to Staff even when a legacy row exists. See [O-15](milestone-2-readiness-review.md#o-15-authorization-conflict). No membership or commission records are loaded or mutated. See [local setup](../README.md).
+Registration and recovery remain `ONBOARDING_POLICY_PENDING` stubs. S2-A implements Admin invitation and separate Client email proof/password setup as documented below. Ordinary activation, the separate Admin exception, and commission reads return `WORKFLOW_NOT_ENABLED` after authorization and input checks. The API rejects new Staff activation grants and denies both stubs to Staff even when a legacy row exists. See [O-15](milestone-2-readiness-review.md#o-15-authorization-conflict). No membership or commission records are loaded or mutated. See [local setup](../README.md).
 
 ## S1-A Admin commercial operations
 
@@ -246,3 +246,134 @@ Automatic focus/visibility revalidation updates the server summary while preserv
 ### Verification
 
 Backend regression tests beginning `S1-B1` cover exact-name validation, current authority, object scope, runtime column privileges, concurrent edits/retries, audit rollback, retry expiry, S1-A funding/explicit activation and preservation of commercial records on disablement. Dashboard tests beginning `S1-B1` cover relay boundaries and Chrome interaction/retry/account-switch scenarios. Chrome tests require `STUDIO_TEST_CHROME` and run independently from Foundation CI.
+
+
+## Implemented S2-A Admin Client onboarding
+
+S2-A creates a new CLIENT User and ClientProfile with no credentials, issues a
+single-use initial link for **manual** Admin sharing, then requires separate email
+proof and a separate password-setup authorization. Email proof leaves account
+PENDING_VERIFICATION; only successful password setup makes it ACTIVE. No purchase,
+payment, Membership, booking, attendance, entitlement or commission operation occurs.
+Registration, password recovery, reactivation, email/role correction and identity
+merge remain excluded/gated. Existing records are never automatically linked.
+
+All paths are relative to `/api/v1`. Admin commands use current `user.manage`, an
+active Admin bearer and `Idempotency-Key`; Staff with any grants are denied writes.
+Management DTOs reject extra fields/queries. Names are trimmed 1–120 without
+controls; email is validated up to 254 and normalized with existing trim+lower
+convention (no alias/dot/plus rewriting). Global unique email wins concurrent
+creation; other-role/missing-profile identities conflict without repair.
+
+| Method / endpoint | Request | Success |
+|---|---|---|
+| POST `/users/invite` | `{email, displayName}` | 201 `{clientId, challengeId, expiresAt, linkAvailable, setupLink?}`. Raw fragment-bearing link only on first execution. |
+| GET `/clients/{id}/onboarding` | No query/body | Status projection: NOT_STARTED, INVITED, VERIFY_EMAIL, SET_PASSWORD, COMPLETED, REVOKED or DISABLED; optional revision/expiry/canReissueAt/delivery. No credentials. |
+| POST `/users/{id}/onboarding/reissue` | `{expectedRevision, reason}` | 200 same disclosure projection; only unfinished INVITED Client. |
+| POST `/users/{id}/onboarding/revoke` | `{expectedRevision, reason}` | 204; invalidate unfinished chain, retain records. No restart/reactivation or implicit disablement. |
+| POST `/auth/accept-invitation` | `{token}` | Public 202 `{accepted:true}` after INVITE consume, pending state and encrypted EMAIL intent commit together. |
+| POST `/auth/verify-email` | `{token}` | Public 200 `{token, expiresAt}` containing a distinct short-lived PASSWORD authorization; email is verified but access remains pending. |
+| POST `/auth/setup-password` | `{token,password}` | Public 204; password authorization consume, Argon2id hash, ACTIVE, case completion, sibling invalidation and audit commit together. No automatic login. |
+| POST `/auth/resend-verification` | `{email}` | Public generic 202 `{accepted:true}` for absent/ineligible/cooldown/eligible identities; only eligible pending case queues a proof. No account-state disclosure. |
+
+Setup and EMAIL proofs expire after **24 hours** from DB issuance. Replacement
+requires **60 seconds** since latest same-purpose issuance and permits at most
+**5 replacement issuances per recipient/purpose in a rolling hour**; initial
+issuance is excluded from the replacement count. Public suppression returns the
+same acknowledgement. Delivery retries retain the same live proof and do not count
+as new issuance or extend expiry. HTTP public endpoints also have 10-request/minute
+per-IP per-route throttling; password hashing is bounded to two operations.
+Generic resend uses a minimum 80ms normal-response budget to reduce simple timing
+differences; this is not a constant-time/distributed-abuse guarantee.
+
+Technical decisions within the authorized implementation: PASSWORD authorization
+expires in **15 minutes**; new password is **12–256 characters**, unmodified and
+hashed with the existing Argon2id helper. These extend the previous local seed
+minimum for setup, without changing existing login validation. Proof/password
+stages are separate commits. Opening links (GET) never consumes or sends email.
+Expired/superseded/consumed/wrong-purpose/revoked/disabled proofs return generic
+`400 CHALLENGE_INVALID_OR_EXPIRED`. Invalid password input does not consume a live
+PASSWORD authorization. A lost proof-success response does not mint a ticket on
+replay: request fresh email proof. No ordinary session is issued before ACTIVE.
+
+Reissue/resend revokes unfinished descendants and increments case revision under
+the exact User lock. Case revoke blocks the whole chain; account disablement also
+blocks all consumption through the current User-state check. Old proofs never
+revive; ACTIVE credentials cannot be overwritten through setup. A consumed initial
+link may naturally expire while a legitimately issued next-stage proof remains
+valid. Same-key Admin replay returns original IDs/expiry without redisclosing a
+secret, even after later transitions, subject to current Admin/target authority.
+The 24-hour command-retry window remains distinct from proof validity. An uncertain
+first disclosure requires explicit reissue rather than duplicate Client creation.
+
+Errors include `409 CLIENT_IDENTITY_CONFLICT`, `ONBOARDING_CHANGED`,
+`ONBOARDING_NOT_ELIGIBLE`, `ONBOARDING_RATE_LIMITED`, existing idempotency conflicts,
+strict 400 validation, 401/403 authority, 404 scoped target, 429 throttle/busy and
+503 retry/unavailability. `ONBOARDING_DELIVERY_KEY` (independent 32-byte hex key) and
+configured Dashboard origin are required; missing configuration returns
+ONBOARDING_UNAVAILABLE before public recipient lookup. No real provider is enabled.
+
+Audit uses existing append-only AuditLog with safe Client/challenge/revision/request
+references and explicit actor attribution; public credential actions use null or
+verified subject actor rather than fabricated authenticated sessions. New actions:
+CLIENT_INVITED, SETUP_LINK_REISSUED, ONBOARDING_REVOKED, SETUP_LINK_CONSUMED,
+EMAIL_CHALLENGE_ISSUED, EMAIL_VERIFIED, PASSWORD_SETUP_COMPLETED, ACCOUNT_ENABLED and
+ONBOARDING_REJECTED. Rejected duplicate/proof events use ONBOARDING_REQUEST targets
+and a separate bounded rejected-outcome transaction so domain rollback does not
+invent a successful mutation. No email/name/password/raw token/digest/body appears
+in audit metadata. Untrusted transport exception text is discarded.
+
+The application-owned queue stores AES-256-GCM encrypted EMAIL delivery payloads
+bound by challenge ID, separate from digest-only proofs. No initial SETUP link is
+emailed. The replaceable transport interface includes bilingual subject/text and
+verification URL; FakeVerificationTransport captures messages only in isolated
+harness memory. OnboardingDeliveryService.dispatch is an explicit worker boundary;
+there is no default provider or scheduled sender. Without an authorized adapter,
+intents remain queued. Claims use 30-second fenced leases, bounded batches and up
+to eight attempts with exponential 30-second–one-hour backoff, stopping at proof
+expiry/invalidation. Payload is cleared on acceptance/expiry/invalidation; provider
+acceptance does not prove inbox delivery or email ownership. An uncertain send may
+produce duplicate copies of the same single-use proof, never a fresh credential.
+
+Dashboard: Admin `/clients/new` and the existing Client detail onboarding panel
+provide creation, status, one-time manual disclosure, reasoned replacement/revoke,
+60-second cooldown and immutable retry handling. Ordinary profile/status reads
+never disclose links; Staff retain their Client reads and S1-B1 restrictions.
+Account/focus/visibility changes conceal the link and revalidate current Admin;
+Client history/BFCache guards remain. Secret disclosure is memory-only and cleared
+on navigation/refresh/hide; copying is an explicit Admin action.
+
+Public `/setup`, `/verify-email` and `/setup-password` strip proof fragments before
+API use and require deliberate POSTs. Their `/api/onboarding/*` allowlist enforces
+exact Origin/Host, bounded JSON and a signed 15-minute pre-authentication nonce
+cookie/header. This is separate from refresh-bound Dashboard CSRF. The browser
+password authorization is Secure HttpOnly SameSite=Strict, never returned in browser
+JSON. Verification returns browser-only `{verified:true, flowId}` with a random
+non-secret correlation ID. The relay binds that ID to the HttpOnly authorization;
+the password page receives it in a stripped fragment and retains only this ID in
+its own history entry for reload. Browser password POST is exactly
+`{password, flowId}`; the relay forwards the existing API-service `{token,password}`
+only when that form's ID matches the cookie. A different tab's verification replaces
+the single browser-wide password authorization; the older tab is rejected without
+forwarding or clearing the newer credential. The old flow must obtain fresh email
+proof. A flow ID alone grants no setup authority; passwords and authorization
+secrets are never stored in history or browser-readable storage.
+
+Generic resend acknowledgement is a neutral notice, not proof consumption or
+completion. It preserves the current proof, password authorization and form draft,
+including suppressed requests. The public body/status does not disclose whether
+issuance occurred. An actual replacement still invalidates old credentials in the
+backend, which rejects their subsequent use. The relay clears a matching password
+authorization on successful completion or authoritative invalid/expired rejection,
+not on resend acknowledgement or a different flow's mismatch.
+
+Admin invitation name/email drafts remain in component memory through focus and
+visibility revalidation; they are concealed while access is checked and cleared
+on identity/access invalidation or successful invitation. Existing current-Admin
+checks, actor binding and immutable command retry behavior remain enforced.
+
+Completion does not create login cookies. Pages are no-store and conceal
+password inputs on pagehide/BFCache restore. The API service response is for the
+proof holder/relay, not an ordinary account access credential.
+
+See [implementation, verification and rollback](s2a-onboarding-implementation.md).
