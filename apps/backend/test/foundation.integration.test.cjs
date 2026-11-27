@@ -3403,6 +3403,154 @@ test('S1-A audit requires both permissions, scopes shared receipts and preserves
   await expectStatus(403, path, adminRead());
 });
 
+
+
+async function maintenanceClient(displayName = 'Maintenance Client') {
+  return migrator.user.create({ data: {
+    normalizedEmail: randomUUID() + '@maintenance.example', role: 'CLIENT', accountState: 'ACTIVE',
+    passwordHash: await hashPassword(password), emailVerifiedAt: new Date(), client: { create: { displayName } },
+  } });
+}
+function profileWrite(displayName, expectedDisplayName, overrides = {}) {
+  return { method: 'PATCH', access: sessions.admin.accessToken, key: randomUUID(),
+    body: { displayName, expectedDisplayName }, ...overrides };
+}
+const profileAudits = id => migrator.auditLog.findMany({ where: { action: 'CLIENT_PROFILE_UPDATED', targetId: id } });
+
+test('S1-B1 Admin edits only displayName, preserves identity, and replays the original audited outcome', async () => {
+  const client = await maintenanceClient();
+  const path = '/clients/' + client.id;
+  const initial = await migrator.clientProfile.findUniqueOrThrow({ where: { userId: client.id } });
+  const options = profileWrite('  اسم العميل  ', initial.displayName);
+  const first = await request(path, options);
+  assert.equal(first.status, 204);
+  const events = await profileAudits(client.id);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].actorId, users.admin.id);
+  assert.equal(events[0].targetType, 'USER');
+  assert.equal(events[0].requestId, first.headers.get('x-request-id'));
+  assert.deepEqual(events[0].redactedDetails, { fields: ['displayName'] });
+  assert(events[0].createdAt instanceof Date);
+  assert.deepEqual(await migrator.user.findUniqueOrThrow({ where: { id: client.id } }), client);
+  assert.deepEqual(await migrator.clientProfile.findUniqueOrThrow({ where: { userId: client.id } }), { ...initial, displayName: 'اسم العميل' });
+  const detail = await expectStatus(200, path, { access: sessions.admin.accessToken });
+  assert.equal(detail.displayName, 'اسم العميل');
+  assert.equal((await expectStatus(200, '/clients?' + new URLSearchParams({ q: 'اسم العميل' }), { access: sessions.admin.accessToken })).items[0].id, client.id);
+  await expectStatus(204, path, options);
+  await expectStatus(204, path, profileWrite('Later name', 'اسم العميل'));
+  // Successful retries return the original outcome even after another authorized edit.
+  await expectStatus(204, path, options);
+  assert.equal((await migrator.clientProfile.findUniqueOrThrow({ where: { userId: client.id } })).displayName, 'Later name');
+  assert.equal((await profileAudits(client.id)).length, 2);
+  await expectStatus(409, path, { ...options, body: { ...options.body, displayName: 'Changed payload' } });
+  await migrator.idempotencyKey.updateMany({ where: { actorId: users.admin.id, operation: 'client.profile.update', key: options.key }, data: { expiresAt: new Date(0) } });
+  assert.equal((await expectStatus(409, path, options)).code, 'IDEMPOTENCY_KEY_EXPIRED');
+  await assert.rejects(runtime.$executeRaw`UPDATE audit_log SET request_id = 'overwrite' WHERE target_id = ${client.id}::uuid`);
+});
+
+test('S1-B1 denies non-Admin writes, invalid inputs and non-Client targets without successful retry records', async () => {
+  const client = await maintenanceClient();
+  const path = '/clients/' + client.id;
+  const keys = await migrator.idempotencyKey.count({ where: { operation: 'client.profile.update' } });
+  await expectStatus(401, path, profileWrite('New', 'Maintenance Client', { access: undefined }));
+  await expectStatus(204, `/staff-grants/${users.clientManager.id}/client.manage`, grantOptions(true));
+  for (const actor of ['clientManager', 'staff', 'coach', 'client']) {
+    await expectStatus(403, path, profileWrite('New', 'Maintenance Client', { access: sessions[actor].accessToken }));
+  }
+  await expectStatus(200, path, { access: sessions.clientManager.accessToken });
+  await expectStatus(204, `/staff-grants/${users.clientManager.id}/client.manage`, grantOptions(false));
+  const valid = { displayName: 'New', expectedDisplayName: 'Maintenance Client' };
+  for (const body of [{}, { ...valid, displayName: '' }, { ...valid, displayName: '  ' }, { ...valid, displayName: 'x'.repeat(121) },
+    { ...valid, displayName: 'control' + String.fromCharCode(0) }, { ...valid, expectedDisplayName: null },
+    { ...valid, email: 'different@example.invalid' }, { ...valid, role: 'ADMIN' }, { ...valid, accountState: 'ACTIVE' }]) {
+    await expectStatus(400, path, { ...profileWrite('New', 'Maintenance Client'), body });
+  }
+  await expectStatus(400, path + '?unexpected=1', profileWrite('New', 'Maintenance Client'));
+  await expectStatus(400, path, profileWrite('New', 'Maintenance Client', { key: undefined }));
+  for (const id of [users.admin.id, users.coach.id, users.missingProfile.id, randomUUID()]) {
+    assert.equal((await expectStatus(404, '/clients/' + id, profileWrite('New', 'Any'))).code, 'CLIENT_NOT_FOUND');
+  }
+  assert.equal(await migrator.idempotencyKey.count({ where: { operation: 'client.profile.update' } }), keys);
+  assert.equal((await profileAudits(client.id)).length, 0);
+  assert.equal((await migrator.clientProfile.findUniqueOrThrow({ where: { userId: client.id } })).displayName, 'Maintenance Client');
+  // Narrow runtime privileges cannot insert/delete profiles, reassign their User or change credentials.
+  for (const sql of [
+    `INSERT INTO client_profile (user_id, display_name) VALUES ('${users.missingProfile.id}', 'Forbidden')`,
+    `DELETE FROM client_profile WHERE user_id = '${client.id}'`,
+    `UPDATE client_profile SET user_id = '${randomUUID()}' WHERE user_id = '${client.id}'`,
+    `UPDATE client_profile SET created_at = now() WHERE user_id = '${client.id}'`,
+    `UPDATE app_user SET normalized_email = 'forbidden@example.invalid' WHERE id = '${client.id}'`,
+    `UPDATE app_user SET password_hash = 'forbidden' WHERE id = '${client.id}'`,
+  ]) await assert.rejects(runtime.$executeRawUnsafe(sql), /permission denied/);
+});
+
+test('S1-B1 serializes competing edits and concurrent retries without duplicate evidence', async () => {
+  const client = await maintenanceClient();
+  const path = '/clients/' + client.id;
+  const attempts = [profileWrite('Winner A', 'Maintenance Client'), profileWrite('Winner B', 'Maintenance Client', { access: sessions.raceAdmin.accessToken })];
+  const responses = await Promise.all(attempts.map(options => request(path, options)));
+  assert.deepEqual(responses.map(res => res.status).sort(), [204, 409]);
+  assert.equal((await responses.find(res => res.status === 409).json()).code, 'CLIENT_PROFILE_CHANGED');
+  assert.equal((await profileAudits(client.id)).length, 1);
+  const row = await migrator.clientProfile.findUniqueOrThrow({ where: { userId: client.id } });
+  const retry = profileWrite('Same request', row.displayName);
+  assert.deepEqual((await Promise.all([request(path, retry), request(path, retry)])).map(res => res.status), [204, 204]);
+  assert.equal((await profileAudits(client.id)).length, 2);
+  // An exact-value precondition preserves legacy whitespace, and a no-op has no extra change event.
+  await migrator.clientProfile.update({ where: { userId: client.id }, data: { displayName: ' legacy ' } });
+  await expectStatus(409, path, profileWrite('Repaired', 'legacy'));
+  await expectStatus(204, path, profileWrite('Repaired', ' legacy '));
+  await expectStatus(204, path, profileWrite('Repaired', 'Repaired'));
+  assert.equal((await profileAudits(client.id)).length, 3);
+});
+
+test('S1-B1 rolls back name and idempotency on audit failure and rechecks current authority on replay', async () => {
+  const client = await maintenanceClient();
+  const path = '/clients/' + client.id, options = profileWrite('Updated', 'Maintenance Client');
+  await migrator.$executeRaw`ALTER TABLE audit_log ADD CONSTRAINT s1b1_reject_profile_audit CHECK (action <> 'CLIENT_PROFILE_UPDATED') NOT VALID`;
+  try {
+    await expectStatus(500, path, options);
+    assert.equal((await migrator.clientProfile.findUniqueOrThrow({ where: { userId: client.id } })).displayName, 'Maintenance Client');
+    assert.equal((await profileAudits(client.id)).length, 0);
+    assert.equal(await migrator.idempotencyKey.count({ where: { operation: 'client.profile.update', key: options.key } }), 0);
+  } finally { await migrator.$executeRaw`ALTER TABLE audit_log DROP CONSTRAINT s1b1_reject_profile_audit`; }
+  await expectStatus(204, path, options);
+  const admin = await migrator.user.create({ data: { normalizedEmail: randomUUID() + '@maintenance.example',
+    role: 'ADMIN', accountState: 'ACTIVE', passwordHash: await hashPassword(password), emailVerifiedAt: new Date() } });
+  const session = await app.get(Sessions).login(admin.normalizedEmail, password);
+  const other = profileWrite('Another update', 'Updated', { access: session.accessToken });
+  await expectStatus(204, path, other);
+  await migrator.user.update({ where: { id: admin.id }, data: { role: 'STAFF' } });
+  await expectStatus(403, path, other);
+  await migrator.user.update({ where: { id: admin.id }, data: { role: 'ADMIN' } });
+  await migrator.authSession.updateMany({ where: { userId: admin.id }, data: { revokedAt: new Date() } });
+  await expectStatus(401, path, other);
+});
+
+test('S1-B1 keeps an edited Client eligible for S1-A and disablement preserves all commercial records', async () => {
+  const client = await maintenanceClient();
+  await expectStatus(204, '/clients/' + client.id, profileWrite('Commercial client', 'Maintenance Client'));
+  const offer = await acceptanceOffer('20.00');
+  const { purchaseId } = await expectStatus(201, positivePricePath, acceptanceRequest(offer, { clientId: client.id }));
+  const { paymentId } = await expectStatus(201, paymentPath, paymentRequest({ clientId: client.id, amount: '20.00' }));
+  await expectStatus(200, verifyPaymentPath(paymentId), adminWrite());
+  await expectStatus(201, allocationPath(paymentId), allocationRequest(purchaseId, '20.00'));
+  assert.equal(await migrator.membership.count({ where: { purchaseId } }), 0);
+  await expectStatus(200, activationPath(purchaseId), adminWrite({}));
+  const before = await Promise.all([migrator.purchase.findUniqueOrThrow({ where: { id: purchaseId } }), migrator.payment.findUniqueOrThrow({ where: { id: paymentId } }),
+    migrator.paymentAllocation.findMany({ where: { purchaseId } }), migrator.membership.findUniqueOrThrow({ where: { purchaseId } })]);
+  const session = await app.get(Sessions).login(client.normalizedEmail, password);
+  const disable = adminWrite();
+  await expectStatus(204, '/users/' + client.id + '/disable', disable);
+  await expectStatus(204, '/users/' + client.id + '/disable', disable);
+  await expectStatus(401, '/me', { access: session.accessToken });
+  assert.deepEqual(await Promise.all([migrator.purchase.findUniqueOrThrow({ where: { id: purchaseId } }), migrator.payment.findUniqueOrThrow({ where: { id: paymentId } }),
+    migrator.paymentAllocation.findMany({ where: { purchaseId } }), migrator.membership.findUniqueOrThrow({ where: { purchaseId } })]), before);
+  assert.equal(await migrator.auditLog.count({ where: { targetId: client.id, action: 'ACCOUNT_DISABLED' } }), 1);
+  assert.equal((await migrator.clientProfile.findUniqueOrThrow({ where: { userId: client.id } })).displayName, 'Commercial client');
+});
+
+
 test('single-use socket tickets, origin checks and immediate grant revocation', async () => {
   const ticket = (await expectStatus(200, '/auth/socket-ticket', { method: 'POST', access: sessions.staff.accessToken })).ticket;
   const wrongOrigin = await fetch(base + '/socket.io/?EIO=4&transport=polling', { headers: { origin: 'https://untrusted.example' } });

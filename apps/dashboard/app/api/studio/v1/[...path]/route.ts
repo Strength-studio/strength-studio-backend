@@ -5,12 +5,14 @@ import { catalogBody, catalogError, catalogQuery, catalogResponse, catalogRoute 
 import { clientQuery, clientRoute, isClientRelayPath, readClientRoute } from '../../../../../lib/client-relay';
 import { purchaseRelay } from '../../../../../lib/purchase-funding-relay';
 import { commercialRelay } from '../../../../../lib/commercial-relay';
+import { clientWriteRelay, clientWriteRoute, rejectedClientWrite } from '../../../../../lib/client-write-relay';
 import { schedulingQuery, schedulingResponse, schedulingRoute } from '../../../../../lib/scheduling';
 import { accessCookie, api, refreshCookie, reply, trustedOrigin, validCsrf } from '../../../../../lib/session';
 
 type Route = { params: Promise<{ path: string[] }> };
 
 function rejectedClientRequest(parts: string[]) {
+  if (parts.length === 2 && parts[0] === 'clients') return rejectedClientWrite(parts);
   if (!clientRoute('GET', parts)) return reply({ code: 'NOT_FOUND' }, 404);
   const response = reply({ code: 'METHOD_NOT_ALLOWED' }, 405);
   response.headers.set('Allow', 'GET');
@@ -39,6 +41,7 @@ function rejectedAttendanceRequest(parts: string[]) {
 
 async function forward(request: NextRequest, route: Route, method: 'GET' | 'POST' | 'PATCH') {
   const { path: parts } = await route.params;
+  if (clientWriteRoute(request.method, parts) || parts[0] === 'users') return clientWriteRelay(request, parts);
   if (parts[0] === 'purchases' && parts[1] === 'positive-price') return commercialRelay(request, parts);
   if (parts[0] === 'payments') return commercialRelay(request, parts);
   if (parts[0] === 'purchases') return purchaseRelay(request, parts);
@@ -107,6 +110,7 @@ export function HEAD(request: NextRequest, route: Route) {
 
 export async function OPTIONS(request: NextRequest, route: Route) {
   const { path } = await route.params;
+  if (path[0] === 'users') return clientWriteRelay(request, path);
   if (path[0] === 'purchases' && path[1] === 'positive-price') return commercialRelay(request, path);
   if (path[0] === 'payments') return commercialRelay(request, path);
   if (path[0] === 'purchases') return purchaseRelay(request, path);
@@ -126,6 +130,7 @@ export function PATCH(request: NextRequest, route: Route) {
 
 export async function PUT(request: NextRequest, route: Route) {
   const { path } = await route.params;
+  if (path[0] === 'users') return clientWriteRelay(request, path);
   if (path[0] === 'purchases' && path[1] === 'positive-price') return commercialRelay(request, path);
   if (path[0] === 'payments') return commercialRelay(request, path);
   if (path[0] === 'purchases') return purchaseRelay(request, path);

@@ -44,7 +44,7 @@ unset LOCAL_ADMIN_PASSWORD LOCAL_ADMIN_EMAIL
 
 With the API running against a database that already has the catalog schema, start the dashboard with `pnpm dev:dashboard`. Open [the local dashboard](http://localhost:3001), matching `DASHBOARD_ORIGIN` in `.env`. Set `API_BASE_URL` to the API origin and configure `DASHBOARD_CSRF_KEY`. Sign in as Admin to manage packages and session types. Staff need explicit catalog grants. A manager also needs `catalog.read` to choose active session types, and `audit.read` to see package audit events.
 
-Admin and Staff with `client.manage` can open the Client directory at `/clients` and view individual profiles. Authenticated Clients can read their own profile through the API. These features use existing Client records and require no schema changes. See the [Client read contract](docs/api-contract.md#implemented-client-reads). Registration, invitation, and account setup remain gated by O-02.
+Admin and Staff with `client.manage` can open the Client directory at `/clients` and view individual profiles. Authenticated Clients can read their own profile through the API. These features use existing Client records and require no schema changes. See the [Client read contract](docs/api-contract.md#implemented-client-reads). Registration, invitation, and account setup remain gated by O-02. Admin can maintain an existing Client’s display name and explicitly disable account access from the detail page. Staff retain read-only access. These S1-B1 writes require the narrow profile-maintenance migration; [scope and retry behavior](docs/api-contract.md#s1-b1-admin-client-profile-maintenance).
 
 ## Verification
 

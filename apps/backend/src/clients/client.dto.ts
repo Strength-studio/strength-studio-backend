@@ -38,6 +38,17 @@ export class ClientSelfProfileDto {
   @ApiProperty({ format: 'email' }) email!: string;
 }
 
+export class UpdateClientProfileDto {
+  @ApiProperty({ minLength: 1, maxLength: 120, description: 'Trimmed display name; control characters are not accepted' })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Matches(/^[^\u0000-\u001f\u007f]{1,120}$/)
+  displayName!: string;
+
+  @ApiProperty({ description: 'Exact displayName read from the Client detail; never trimmed or normalized' })
+  @IsString()
+  expectedDisplayName!: string;
+}
+
 export class ClientDirectoryItemDto extends ClientSelfProfileDto {
   @ApiProperty({ enum: AccountState }) accountState!: AccountState;
   @ApiProperty() emailVerified!: boolean;

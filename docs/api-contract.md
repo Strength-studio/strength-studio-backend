@@ -199,3 +199,50 @@ The positive-price allocation API locks the receipt and purchase, rechecks curre
 `GET /purchases/{purchaseId}/audit` requires **both** `purchase.funding.read` and `audit.read`, checked separately because action arrays otherwise use OR semantics. It returns only acceptance, allocated-receipt recording/verification, that purchase's allocations and its Membership activation events. It omits arbitrary audit details, agreement/payment evidence and unrelated events. `limit` defaults to 50 (1–50); `after` is the previous `nextCursor`. Cursors must belong to the same scoped history or return `INVALID_PURCHASE_AUDIT_CURSOR`. Ordering uses descending `(created_at, id)` and retains database timestamp precision. No commission/private-schema access is introduced. Unallocated receipts have no purchase relationship and are not included.
 
 Dashboard retries retain an immutable body/key for each command and checkpoint acknowledged stages, including stable receipt intake IDs. A lost response can be replayed without duplicate records; a later failed stage does not create another receipt. Only deterministic validation rejections reopen the corresponding input. The workflow keeps identifiers visible and does not persist agreement or receipt data after navigation. Leaving/reloading the page is not automatic workflow recovery; keep it open until completion and retain the displayed identifiers for Admin review if a conflict requires intervention.
+
+
+## S1-B1 Admin Client profile maintenance
+
+S1-B1 maintains existing Client identities. Admin can edit `displayName` and explicitly disable account access. Staff retain the existing `client.manage` reads; that grant does not confer mutation rights. Client creation, email/phone changes, self-registration, invitation delivery, verification, recovery and reactivation remain gated/excluded under O-02.
+
+### Profile command
+
+`PATCH /api/v1/clients/{id}` requires current Admin-only `user.manage`, `Idempotency-Key`, and a strict JSON object:
+
+```json
+{ "displayName": "Client name", "expectedDisplayName": "Previously read exact name" }
+```
+
+The new name is trimmed, must contain 1–120 characters and no control characters. `expectedDisplayName` is the exact stored string from the detail response, including any legacy whitespace; it is not normalized. Unexpected fields and query parameters are rejected. No email, role, account state, credentials, User/profile association or commercial fields can be changed.
+
+The command locks the target identity and Client profile, rechecks current authorization, requires a Client-role User with a profile (`404 CLIENT_NOT_FOUND` otherwise), then compares the expected name. A stale name returns `409 CLIENT_PROFILE_CHANGED` without a successful idempotency record. The exact-value precondition does not detect an intervening change that subsequently restores the same name; no revision column is introduced in this slice.
+
+Successful responses are `204`. Retry scope is `(actor, client.profile.update, key)` for 24 hours. The digest includes the Client UUID, normalized new name and exact expected name. Concurrent identical retries return the original result without another mutation or audit. Successful replay remains successful after another authorized name edit, while still checking current authority and target scope. Changed payloads or expired keys return the existing idempotency conflicts. A new key whose requested name already equals the expected/current name succeeds without a change event.
+
+`CLIENT_PROFILE_UPDATED` is recorded transactionally with actor, target type `USER`, target Client/User UUID, request ID and timestamp. Redacted metadata is only `{ "fields": ["displayName"] }`; names and request bodies are not copied to audit metadata. Audit failure rolls back both the name change and retry outcome. There is no new audit-history endpoint or access grant.
+
+The new migration adds the audit-action enum value and grants `studio_api` only `UPDATE(display_name)` on `client_profile`. It grants no INSERT/DELETE, identity reassignment, email or credential privileges. Apply it only in an independently approved environment; implementation verification uses a disposable loopback database.
+
+### Application rollback and migration compatibility
+
+For `20261127000100_client_profile_maintenance`, roll back the application while leaving the migration applied. It adds an audit enum value and a column privilege, without removing or changing the tables/columns used by the preceding application. The preceding S1-A application does not issue profile-maintenance writes or include `CLIENT_PROFILE_UPDATED` in its scoped Purchase audit query. Before rolling back any other version or consumer, verify that its audit readers can coexist with the additional action. Stop/drain S1-B1 instances and in-flight commands before completing the application rollback; keep the migration history intact.
+
+The added `UPDATE(display_name)` grant can remain during application rollback; it does not enable a write endpoint in the older application. If the rollback also requires removing this unused runtime privilege, first verify that no running version or other authorized operation depends on it. A separately authorized database change can then revoke only that column grant (`REVOKE UPDATE (display_name) ON public.client_profile FROM studio_api`). Do not revoke existing table/identity/audit privileges. If the feature is later restored, explicitly restore and verify the column privilege through an authorized change: an already-applied Prisma migration will not automatically run again to restore a manually revoked grant. These are rollback instructions, not authorization to execute database changes.
+
+Preserve every committed `CLIENT_PROFILE_UPDATED` audit row, its actor/target/request identifiers and timestamp, and the enum value needed to interpret that evidence. Do not delete audit rows, rewrite the enum type or edit/delete an applied migration to imitate an older schema. Destructive enum/evidence removal is unnecessary for application rollback and risks losing traceability or breaking readers and dependencies.
+
+Any later database cleanup requires separate authorization, review of all stored values and schema/application/reporting dependencies, preservation of audit evidence under the approved retention requirements, verified backups/restore capability and rehearsal in an isolated disposable database. An application rollback alone is not a reason to perform that cleanup. No new migration or database cleanup is part of this follow-up.
+
+### Dashboard
+
+The existing `/clients/{id}` page adds Admin-only name editing, current-profile refresh and explicit account-disable confirmation. Disablement reuses `POST /api/v1/users/{id}/disable`, existing `ACCOUNT_DISABLED` auditing and session revocation. It does not cancel bookings, suspend Memberships or change financial records. There is no arbitrary status dropdown or reactivation action.
+
+The same-origin relay permits only `PATCH clients/{uuid}` and `POST users/{uuid}/disable` as new writes. It requires exact configured Origin/Host, refresh-bound CSRF, a bounded JSON body, an idempotency key and an `X-Studio-Actor` matching the current Admin identity. The disable relay verifies that the target resolves through the existing Client detail scope before forwarding. Tokens remain in Secure HttpOnly cookies; only projected errors and no-content success cross the relay.
+
+An uncertain write retains its immutable body/key, locks competing actions and offers an explicit same-request retry. Refresh does not discard an uncertain intent. Navigation/reload clears this in-memory checkpoint, so the UI instructs Admin to review the current record before a new submission. A successful confirmed refresh clears stale-edit conflicts. Account mismatch or authorization denial unmounts the profile workflow, aborts pending reads and discards old handlers/intents. Focus/visibility revalidation conceals the profile while checking. Existing Client history/BFCache protection remains enabled.
+
+Automatic focus/visibility revalidation updates the server summary while preserving a dirty display-name draft and its original exact `expectedDisplayName`. It does not clear a conflict belonging to that draft. Explicit profile refresh requires confirmation before discarding unsaved input; cancelling preserves both the draft and its precondition. Only a successful confirmed refresh resets that draft/conflict to the saved name. A confirmed save resets the draft baseline to the acknowledged name before the follow-up read. An uncertain write remains immutable during either refresh path.
+
+### Verification
+
+Backend regression tests beginning `S1-B1` cover exact-name validation, current authority, object scope, runtime column privileges, concurrent edits/retries, audit rollback, retry expiry, S1-A funding/explicit activation and preservation of commercial records on disablement. Dashboard tests beginning `S1-B1` cover relay boundaries and Chrome interaction/retry/account-switch scenarios. Chrome tests require `STUDIO_TEST_CHROME` and run independently from Foundation CI.

@@ -102,6 +102,13 @@ a.button, a.text-button { text-decoration: none; }
 a.text-button:hover { text-decoration: underline; }
 .client-summary { padding: 18px; }
 .client-summary .terms { margin-top: 14px; overflow-wrap: anywhere; }
+.client-profile-content > .button { margin-block: 14px; }
+.client-maintenance { display: grid; gap: 14px; padding: 18px; }
+.client-maintenance form, .client-maintenance label { display: grid; gap: 8px; min-width: 0; }
+.client-maintenance input[name="displayName"] { width: 100%; }
+.client-maintenance .button { justify-self: start; }
+.client-maintenance .client-disable-confirmation { display: flex; align-items: start; gap: 8px; }
+.client-disable-confirmation input { margin-top: 5px; flex: none; }
 .code { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .72rem; overflow-wrap: anywhere; }
 .price { font-weight: 700; }
 .badge, .chip { padding: 3px 8px; border-radius: 20px; border: 1px solid #394b66; background: #202f46; color: #c0cde0; font-size: .7rem; font-weight: 650; }
