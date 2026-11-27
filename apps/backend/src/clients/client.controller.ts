@@ -1,9 +1,9 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
-import { ApiBadRequestResponse, ApiBearerAuth, ApiForbiddenResponse, ApiNotFoundResponse, ApiOkResponse, ApiOperation, ApiTags,
-  ApiUnauthorizedResponse } from '@nestjs/swagger';
+import { Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe, Patch, Query, Req } from '@nestjs/common';
+import { ApiBadRequestResponse, ApiBearerAuth, ApiConflictResponse, ApiForbiddenResponse, ApiHeader, ApiNoContentResponse,
+  ApiNotFoundResponse, ApiOkResponse, ApiOperation, ApiTags, ApiUnauthorizedResponse } from '@nestjs/swagger';
 import { AccessContext } from '../identity/session.service';
-import { CurrentAccess, RequireAction } from '../platform/http';
-import { ClientDetailDto, ClientListQuery, ClientPageDto, ClientSelfProfileDto } from './client.dto';
+import { CurrentAccess, RequireAction, StudioRequest } from '../platform/http';
+import { ClientDetailDto, ClientListQuery, ClientPageDto, ClientSelfProfileDto, UpdateClientProfileDto } from './client.dto';
 import { ClientService } from './client.service';
 
 class EmptyQuery {}
@@ -31,6 +31,19 @@ export class ClientController {
   @ApiNotFoundResponse()
   detail(@Param('id', ParseUUIDPipe) id: string, @Query() _query: EmptyQuery) {
     return this.clients.detail(id.toLowerCase());
+  }
+
+  @Patch('clients/:id') @RequireAction('user.manage') @HttpCode(204)
+  @ApiOperation({ summary: 'Update an existing Client display name', description: 'Admin-only user.manage. No onboarding, email, role or account-state changes.' })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiNoContentResponse()
+  @ApiBadRequestResponse({ description: 'Invalid input or idempotency key' })
+  @ApiNotFoundResponse({ description: 'CLIENT_NOT_FOUND' })
+  @ApiConflictResponse({ description: 'CLIENT_PROFILE_CHANGED, IDEMPOTENCY_KEY_REUSED or IDEMPOTENCY_KEY_EXPIRED' })
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateClientProfileDto,
+    @Query() _query: EmptyQuery, @Headers('idempotency-key') key: string | undefined,
+    @CurrentAccess() access: AccessContext, @Req() req: StudioRequest) {
+    return this.clients.update(id.toLowerCase(), dto, access, key, req.requestId);
   }
 
   @Get('me/client-profile') @RequireAction('account.self')

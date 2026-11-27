@@ -71,3 +71,15 @@ The Technical Administrator is an infrastructure identity. Technical and emergen
 - **Logs and delivery.** Shared API, proxy, SQL, error, and worker logs exclude commission payloads, sensitive route parameters, and bound values. Record private audit only in the restricted schema. Commission data and events never enter notifications, sockets, or the operational outbox.
 
 The Foundation test plan must exercise role and grant denial and negative DB privileges. Before enabling commissions, test Client, Coach, and Staff with all grants against private API and direct DB access, profile and report serializers, export access after revocation, caches, logs, notifications, sockets, and worker credentials. Verify the authorized Admin path separately. These are required tests, not executed results.
+
+
+## Implemented S1-B1 maintenance boundary
+
+| Operation | Admin | Staff | Coach | Client |
+|---|---|---|---|---|
+| Existing Client directory/detail | Yes | Existing `client.manage` grant | No | No |
+| Existing own-Client profile | No | No | No | Own profile only |
+| Edit existing Client displayName | `user.manage`, Admin only | No, including `client.manage` grantees | No | No |
+| Disable existing Client account access | Existing `user.manage`, Admin only | No | No | No |
+
+New display-name writes use independent operation `client.profile.update` within the existing transactional command/idempotency system. They do not extend Staff grants or expose commission/financial data. Existing Admin account-disable semantics remain unchanged. Creation, setup, verification, reactivation and delegated Staff mutations are outside S1-B1; O-02 remains unresolved for onboarding.

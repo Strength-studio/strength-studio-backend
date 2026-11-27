@@ -1198,6 +1198,67 @@
         "tags": [
           "Clients"
         ]
+      },
+      "patch": {
+        "description": "Admin-only user.manage. No onboarding, email, role or account-state changes.",
+        "operationId": "ClientController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClientProfileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid input or idempotency key"
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": "CLIENT_NOT_FOUND"
+          },
+          "409": {
+            "description": "CLIENT_PROFILE_CHANGED, IDEMPOTENCY_KEY_REUSED or IDEMPOTENCY_KEY_EXPIRED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update an existing Client display name",
+        "tags": [
+          "Clients"
+        ]
       }
     },
     "/api/v1/me/client-profile": {
@@ -3529,6 +3590,25 @@
           "emailVerified",
           "createdAt",
           "emailVerifiedAt"
+        ]
+      },
+      "UpdateClientProfileDto": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Trimmed display name; control characters are not accepted"
+          },
+          "expectedDisplayName": {
+            "type": "string",
+            "description": "Exact displayName read from the Client detail; never trimmed or normalized"
+          }
+        },
+        "required": [
+          "displayName",
+          "expectedDisplayName"
         ]
       },
       "ClientSelfProfileDto": {

@@ -68,6 +68,7 @@ enum TokenPurpose {
 }
 
 enum AuditAction {
+  CLIENT_PROFILE_UPDATED
   ACCOUNT_DISABLED
   STAFF_GRANT_CHANGED
   REFRESH_REPLAY

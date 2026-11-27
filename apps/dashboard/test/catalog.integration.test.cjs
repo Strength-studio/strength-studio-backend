@@ -218,7 +218,7 @@ test('authorized dashboard pages render Client directory filters, pagination, an
   });
 });
 
-test('Client pages and relay reject unauthorized navigation and keep Client routes read-only', async () => {
+test('Client pages and relay reject unauthorized navigation and bound profile writes', async () => {
   const admin = await signIn('admin');
   const { items: [client] } = await relay(admin, 200, 'clients?limit=1');
   await relay({ cookie: '' }, 401, 'clients');
@@ -243,10 +243,9 @@ test('Client pages and relay reject unauthorized navigation and keep Client rout
   await relay(admin, 400, 'clients?emailVerified=1');
   await relay(admin, 400, 'clients?q=' + 'a'.repeat(121));
   await relay(admin, 404, 'clients/' + client.id + '/audit');
-  for (const method of ['POST', 'PATCH']) {
-    await relay(admin, 405, 'clients/' + client.id, { method, csrf: '' });
-    await relay(admin, 405, 'clients/' + client.id, { method });
-  }
+  await relay(admin, 405, 'clients/' + client.id, { method: 'POST', allow: 'GET, PATCH' });
+  await relay(admin, 403, 'clients/' + client.id, { method: 'PATCH', csrf: '' });
+  await relay(admin, 400, 'clients/' + client.id, { method: 'PATCH' });
   await relay(admin, 200, 'clients', { source: 'https://example.invalid', csrf: '', headers: { origin: 'https://example.invalid' } });
 });
 
@@ -262,10 +261,18 @@ test('Client relay enforces the method and path matrix before sending upstream r
   ];
   for (const method of ['GET', 'HEAD', 'OPTIONS', 'POST', 'PATCH', 'PUT', 'DELETE']) {
     for (const { path, actor, supported } of routes) {
+      if (method === 'PATCH' && path === 'clients/' + id) {
+        const actorId = (await relay(admin, 200, 'me')).id;
+        const profile = await relay(admin, 200, path);
+        const before = upstreamRequests;
+        await relay(admin, 204, path, { method, payload: { displayName: profile.displayName, expectedDisplayName: profile.displayName }, headers: { 'x-studio-actor': actorId } });
+        assert.equal(upstreamRequests - before, 2, method + ' ' + path);
+        continue;
+      }
       const forwards = method === 'GET' && supported;
       const status = forwards ? 200 : supported ? 405 : 404;
       const before = upstreamRequests;
-      const body = await relay(actor, status, path, { method });
+      const body = await relay(actor, status, path, { method, allow: path === 'clients/' + id ? 'GET, PATCH' : 'GET' });
       assert.equal(upstreamRequests - before, forwards ? 1 : 0, method + ' ' + path);
       if (!forwards && method !== 'HEAD') assert.deepEqual(body, {
         code: supported ? 'METHOD_NOT_ALLOWED' : 'NOT_FOUND',
@@ -1877,6 +1884,254 @@ test('S1-A in Chrome discards delayed refresh data and aborts requests after aut
     assert.equal(await browser.evaluate(`(${commercialDenied}) && (${concealedCommercialData})`),true);
     assert.equal(await browser.evaluate(`document.querySelectorAll('form,button').length`),0);
     assert.equal(await fixture.membership.count({where:{purchaseId}}),1);
+  });
+});
+
+
+async function profileFixture() {
+  return fixture.user.create({ data: { normalizedEmail: randomUUID() + '@profile.example', role: 'CLIENT',
+    accountState: 'ACTIVE', emailVerifiedAt: new Date(), client: { create: { displayName: 'Profile maintenance fixture' } } } });
+}
+
+test('S1-B1 relay protects origin, CSRF, current Admin identity, strict payloads and Client-only disablement', async () => {
+  const target = await profileFixture(), admin = await signIn('admin');
+  const actorId = (await relay(admin, 200, 'me')).id;
+  const path = 'clients/' + target.id;
+  const options = { method: 'PATCH', payload: { displayName: 'Updated Client', expectedDisplayName: 'Profile maintenance fixture' },
+    headers: { 'x-studio-actor': actorId }, key: randomUUID() };
+  for (const override of [{ source: 'https://example.invalid' }, { csrf: '' }]) {
+    const count = upstreamRequests;
+    await relay(admin, 403, path, { ...options, ...override });
+    assert.equal(upstreamRequests, count);
+  }
+  const beforeHost = upstreamRequests;
+  const forgedHost = await new Promise((resolve, reject) => {
+    const body = JSON.stringify(options.payload);
+    const request = httpRequest(origin + '/api/studio/v1/' + path, {
+      method: 'PATCH', headers: { host: 'invalid.example', origin, cookie: admin.cookie,
+        'x-csrf-token': admin.csrf, 'x-studio-actor': actorId, 'idempotency-key': options.key,
+        'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    }, response => {
+      let raw = '';
+      response.setEncoding('utf8').on('data', chunk => { raw += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, raw }));
+      response.on('error', reject);
+    });
+    request.on('error', reject); request.end(body);
+  });
+  assert.deepEqual(forgedHost, { status: 403, raw: '{"code":"CSRF_DENIED"}' });
+  assert.equal(upstreamRequests, beforeHost);
+  for (const override of [{ key: '' }, { headers: {} }, { payload: { ...options.payload, email: 'other@example.invalid' } },
+    { payload: { ...options.payload, displayName: 'x'.repeat(121) } }, { payload: { ...options.payload, displayName: '  ' } }]) {
+    const count = upstreamRequests;
+    await relay(admin, 400, path, { ...options, ...override });
+    assert.equal(upstreamRequests, count);
+  }
+  for (const name of ['clientManager', 'client', 'coach']) {
+    const actor = await signIn(name);
+    const id = (await relay(actor, 200, 'me')).id;
+    await relay(actor, 403, path, { ...options, headers: { 'x-studio-actor': id } });
+  }
+  await relay(admin, 403, path, { ...options, headers: { 'x-studio-actor': randomUUID() } });
+  await relay(admin, 400, path + '?unsafe=true', options);
+  await relay(admin, 204, path, options);
+  await relay(admin, 204, path, options);
+  assert.equal((await relay(admin, 200, path)).displayName, 'Updated Client');
+  assert.equal((await relay(admin, 409, path, { ...options, key: randomUUID() })).code, 'CLIENT_PROFILE_CHANGED');
+  assert.equal(await fixture.auditLog.count({ where: { action: 'CLIENT_PROFILE_UPDATED', targetId: target.id } }), 1);
+  const disable = { method: 'POST', payload: {}, headers: options.headers, key: randomUUID() };
+  const staffId = (await relay(await signIn('clientManager'), 200, 'me')).id;
+  await relay(admin, 404, 'users/' + staffId + '/disable', disable);
+  for (const method of ['GET', 'HEAD', 'OPTIONS', 'PATCH', 'PUT', 'DELETE']) {
+    await relay(admin, 405, 'users/' + target.id + '/disable', { method, allow: 'POST' });
+  }
+  for (const path of ['users', 'users/' + target.id, 'users/invite', 'clients/' + target.id + '/activate']) {
+    await relay(admin, 404, path, { method: 'POST', payload: {} });
+  }
+  await relay(admin, 204, 'users/' + target.id + '/disable', disable);
+  await relay(admin, 204, 'users/' + target.id + '/disable', disable);
+  assert.equal((await relay(admin, 200, path)).accountState, 'DISABLED');
+  assert.equal(await fixture.auditLog.count({ where: { action: 'ACCOUNT_DISABLED', targetId: target.id } }), 1);
+});
+
+test('S1-B1 in Chrome saves, retries an ambiguous success, refreshes a stale edit and confirms account disablement', { ...browserTest, timeout: 60_000 }, async () => {
+  const target = await profileFixture(), admin = await signIn('admin');
+  await withChrome(origin, target.normalizedEmail, async browser => {
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/clients?' + new URLSearchParams({ q: target.normalizedEmail }));
+    await browser.until(`document.querySelector('tbody a[href="/clients/${target.id}"]')`, 'directory target');
+    await browser.evaluate(`document.querySelector('tbody a[href="/clients/${target.id}"]').click();true`);
+    await browser.until(`document.querySelector('[name=displayName]:enabled')`, 'profile editor');
+    if (process.env.STUDIO_TEST_ARTIFACT_DIR) {
+      require('node:fs').mkdirSync(process.env.STUDIO_TEST_ARTIFACT_DIR, { recursive: true });
+      require('node:fs').writeFileSync(resolve(process.env.STUDIO_TEST_ARTIFACT_DIR, 'profile-editor.png'), Buffer.from(await browser.screenshot(), 'base64'));
+    }
+    await commercialSet(browser, 'displayName', 'Saved Client');
+    await browser.evaluate(`(()=>{const real=window.fetch;window.profileKeys=[];window.loseProfileResponse=true;window.fetch=async(input,options)=>{
+      if(options?.method==='PATCH'){window.profileKeys.push(options.headers['Idempotency-Key']);const response=await real(input,options);
+        if(window.loseProfileResponse){window.loseProfileResponse=false;throw new Error('Synthetic response loss');}return response;}
+      return real(input,options);};return true})()`);
+    await commercialClick(browser, 'Save display name');
+    await browser.until(`document.querySelector('[role=alert]')?.textContent.includes('could not be confirmed')`, 'ambiguous save');
+    assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').disabled`), true);
+    await commercialClick(browser, 'Retry original request');
+    await browser.until(`document.querySelector('[role=status]')?.textContent==='Display name saved.'`, 'confirmed retry');
+    assert.equal(await browser.evaluate(`window.profileKeys.length===2 && window.profileKeys[0]===window.profileKeys[1]`), true);
+    assert.equal(await fixture.auditLog.count({ where: { action: 'CLIENT_PROFILE_UPDATED', targetId: target.id } }), 1);
+    await fixture.clientProfile.update({ where: { userId: target.id }, data: { displayName: 'Concurrent name' } });
+    await commercialSet(browser, 'displayName', 'Stale overwrite');
+    await commercialClick(browser, 'Save display name');
+    await browser.until(`document.querySelector('[role=alert]')?.textContent.includes('This profile changed')`, 'stale edit conflict');
+    assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').disabled`), true);
+    await commercialClick(browser, 'Refresh profile');
+    await commercialClick(browser, 'Discard changes and refresh');
+    await browser.until(`document.querySelector('[name=displayName]:enabled')?.value==='Concurrent name' && !document.querySelector('[role=alert]')`, 'authoritative refresh');
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Disable account access').disabled`), true);
+    await browser.evaluate(`document.querySelector('input[type=checkbox]').click();true`);
+    await commercialClick(browser, 'Disable account access');
+    await browser.until(`document.querySelector('.client-summary').textContent.includes('Disabled')`, 'disabled account');
+    assert.equal(await fixture.auditLog.count({ where: { action: 'ACCOUNT_DISABLED', targetId: target.id } }), 1);
+    await browser.evaluate(`document.querySelector('a.back').click();true`);
+    await browser.until(`location.pathname==='/clients' && document.querySelector('tbody')?.textContent.includes('Concurrent name')`, 'directory reflects name through navigation');
+  });
+});
+
+test('S1-B1 in Chrome conceals the profile and invalidates retained handlers after an account switch', { ...browserTest, timeout: 60_000 }, async () => {
+  const target = await profileFixture(), admin = await signIn('admin');
+  await withChrome(origin, target.normalizedEmail, async browser => {
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/clients/' + target.id);
+    await browser.until(`document.querySelector('[name=displayName]:enabled')`, 'profile editor');
+    await browser.evaluate(`window.oldProfileForm=document.querySelector('form');true`);
+    const other = await signIn('coach');
+    for (const pair of other.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await commercialClick(browser, 'Refresh profile');
+    await browser.until(`document.querySelector('[role=alert]')?.textContent.includes('session or access changed')`, 'concealed denied profile');
+    assert.equal(await browser.evaluate(`!document.querySelector('.client-summary,form,input') && !document.querySelector('.workspace-content').textContent.includes(${JSON.stringify(target.normalizedEmail)})`), true);
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.evaluate(`window.oldProfileForm.requestSubmit();true`);
+    await browser.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await fixture.auditLog.count({ where: { action: 'CLIENT_PROFILE_UPDATED', targetId: target.id } }), 0);
+    assert.equal(await browser.evaluate(`!document.querySelector('form,input')`), true);
+  });
+});
+
+
+test('S1-B1 in Chrome aborts and discards a delayed profile response when focus reveals an account switch', { ...browserTest, timeout: 60_000 }, async () => {
+  const target = await profileFixture(), admin = await signIn('admin');
+  await withChrome(origin, target.normalizedEmail, async browser => {
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/clients/' + target.id);
+    await browser.until(`document.querySelector('[name=displayName]:enabled')`, 'profile editor');
+    await browser.evaluate(`(()=>{const real=window.fetch;window.holdProfile=true;window.fetch=async(input,options)=>{
+      if(window.holdProfile && String(input).endsWith('/clients/${target.id}')){window.holdProfile=false;
+        const response=await real(input,options);const body=await response.json();window.heldProfileSignal=options.signal;
+        return new Promise(resolve=>{window.releaseProfile=()=>resolve(Response.json(body));});}
+      return real(input,options);};return true})()`);
+    await commercialClick(browser, 'Refresh profile');
+    await browser.until(`!!window.releaseProfile`, 'held authorized profile response');
+    const other = await signIn('coach');
+    for (const pair of other.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.evaluate(`dispatchEvent(new Event('focus'));true`);
+    await browser.until(`document.querySelector('[role=alert]')?.textContent.includes('session or access changed')`, 'account switch invalidation');
+    assert.equal(await browser.evaluate(`window.heldProfileSignal.aborted`), true);
+    await browser.evaluate(`window.releaseProfile();new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await browser.evaluate(`!document.querySelector('.client-summary,form,input') && !document.querySelector('.workspace-content').textContent.includes(${JSON.stringify(target.normalizedEmail)})`), true);
+  });
+});
+
+test('S1-B1 in Chrome retains Staff reads without Admin controls and conceals data after grant revocation', { ...browserTest, timeout: 60_000 }, async () => {
+  const target = await profileFixture(), staff = await signIn('clientManager');
+  const user = await fixture.user.findUniqueOrThrow({ where: { normalizedEmail: email('clientManager') } });
+  await withChrome(origin, target.normalizedEmail, async browser => {
+    for (const pair of staff.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/clients/' + target.id);
+    await browser.until(`document.querySelector('[data-client-profile][aria-busy="false"]') && document.querySelector('.client-summary')`, 'Staff profile read');
+    assert.equal(await browser.evaluate(`document.querySelector('form,input,.client-maintenance')===null`), true);
+    await fixture.staffGrant.update({ where: { staffUserId_permission: { staffUserId: user.id, permission: 'CLIENT_MANAGE' } }, data: { revokedAt: new Date() } });
+    try {
+      await commercialClick(browser, 'Refresh profile');
+      await browser.until(`document.querySelector('[role=alert]')?.textContent.includes('session or access changed')`, 'grant denial clears profile');
+      assert.equal(await browser.evaluate(`!document.querySelector('.client-summary') && !document.querySelector('.workspace-content').textContent.includes(${JSON.stringify(target.normalizedEmail)})`), true);
+    } finally {
+      await fixture.staffGrant.update({ where: { staffUserId_permission: { staffUserId: user.id, permission: 'CLIENT_MANAGE' } }, data: { revokedAt: null } });
+    }
+  });
+});
+
+test('S1-B1 draft in Chrome preserves dirty input and its original stale-edit precondition on focus and visibility', { ...browserTest, timeout: 60_000 }, async () => {
+  const target = await profileFixture(), admin = await signIn('admin');
+  await withChrome(origin, target.normalizedEmail, async browser => {
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/clients/' + target.id);
+    await browser.until(`document.querySelector('[name=displayName]:enabled')`, 'profile editor');
+    await commercialSet(browser, 'displayName', 'Unsaved Admin draft');
+    await browser.evaluate(`(()=>{const real=window.fetch;window.profileWrites=[];window.profileReads=0;window.fetch=(input,options)=>{
+      if(options?.method==='PATCH')window.profileWrites.push(JSON.parse(options.body));
+      else if(String(input).endsWith('/clients/${target.id}'))window.profileReads++;return real(input,options);};return true})()`);
+    for (const event of ['focus', 'visibilitychange']) {
+      const concurrentName = 'Concurrent name after ' + event;
+      await fixture.clientProfile.update({ where: { userId: target.id }, data: { displayName: concurrentName } });
+      await browser.evaluate(event === 'focus' ? `dispatchEvent(new Event('focus'));true` : `document.dispatchEvent(new Event('visibilitychange'));true`);
+      await browser.until(`document.querySelector('h1')?.textContent===${JSON.stringify(concurrentName)} && document.querySelector('[data-client-profile][aria-busy="false"]')`, 'automatic revalidation');
+      assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').value`), 'Unsaved Admin draft');
+    }
+    await commercialClick(browser, 'Save display name');
+    await browser.until(`document.querySelector('[role=alert]')?.textContent.includes('This profile changed')`, 'original draft conflicts with concurrent edit');
+    assert.deepEqual(await browser.evaluate('window.profileWrites'), [{ displayName: 'Unsaved Admin draft', expectedDisplayName: 'Profile maintenance fixture' }]);
+    const conflictReads = await browser.evaluate('window.profileReads');
+    await browser.evaluate(`dispatchEvent(new Event('focus'));true`);
+    await browser.until(`window.profileReads>${conflictReads} && document.querySelector('[data-client-profile][aria-busy="false"]') && !document.querySelector('[role=status]')`, 'conflicted draft revalidated');
+    assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').value`), 'Unsaved Admin draft');
+    assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').disabled`), true);
+    assert.match(await browser.evaluate(`document.querySelector('[role=alert]').textContent`), /This profile changed/);
+    assert.equal((await fixture.clientProfile.findUniqueOrThrow({ where: { userId: target.id } })).displayName, 'Concurrent name after visibilitychange');
+    assert.equal(await fixture.auditLog.count({ where: { action: 'CLIENT_PROFILE_UPDATED', targetId: target.id } }), 0);
+  });
+});
+
+test('S1-B1 draft in Chrome confirms explicit discard and resets the draft baseline after successful saves', { ...browserTest, timeout: 60_000 }, async () => {
+  const target = await profileFixture(), admin = await signIn('admin');
+  await withChrome(origin, target.normalizedEmail, async browser => {
+    for (const pair of admin.cookie.split('; ')) await browser.setCookie(origin, pair);
+    await browser.go('/clients/' + target.id);
+    await browser.until(`document.querySelector('[name=displayName]:enabled')`, 'profile editor');
+    await browser.evaluate(`(()=>{const real=window.fetch;window.profileWrites=[];window.profileReads=0;window.fetch=(input,options)=>{
+      if(String(input).endsWith('/clients/${target.id}')){
+        if(options?.method==='PATCH')window.profileWrites.push(JSON.parse(options.body));else window.profileReads++;
+      }return real(input,options);};return true})()`);
+    await commercialSet(browser, 'displayName', 'Do not discard silently');
+    await fixture.clientProfile.update({ where: { userId: target.id }, data: { displayName: 'Latest saved name' } });
+    const reads = await browser.evaluate('window.profileReads');
+    await commercialClick(browser, 'Refresh profile');
+    await browser.until(`document.querySelector('[aria-label="Confirm profile refresh"]')`, 'discard warning');
+    assert.match(await browser.evaluate(`document.querySelector('[aria-label="Confirm profile refresh"]').textContent`), /discard.*unsaved/i);
+    assert.equal(await browser.evaluate('window.profileReads'), reads, 'Opening confirmation must not refresh');
+    await commercialClick(browser, 'Keep editing');
+    await browser.until(`document.querySelector('[name=displayName]:enabled') && !document.querySelector('[aria-label="Confirm profile refresh"]')`, 'cancelled refresh');
+    assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').value`), 'Do not discard silently');
+    assert.equal(await browser.evaluate('window.profileReads'), reads, 'Cancelling must not refresh');
+    await commercialClick(browser, 'Refresh profile');
+    await commercialClick(browser, 'Discard changes and refresh');
+    await browser.until(`document.querySelector('[name=displayName]:enabled')?.value==='Latest saved name'`, 'confirmed refresh');
+    await commercialSet(browser, 'displayName', '  Saved draft  ');
+    await commercialClick(browser, 'Save display name');
+    await browser.until(`document.querySelector('[role=status]')?.textContent==='Display name saved.' && document.querySelector('[name=displayName]:enabled')?.value==='Saved draft'`, 'save resets draft');
+    const savedReads = await browser.evaluate('window.profileReads');
+    await commercialClick(browser, 'Refresh profile');
+    await browser.until(`window.profileReads>${savedReads} && document.querySelector('[data-client-profile][aria-busy="false"]')`, 'pristine refresh needs no confirmation');
+    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Confirm profile refresh"]')===null`), true);
+    await commercialSet(browser, 'displayName', 'Second saved draft');
+    await browser.evaluate(`dispatchEvent(new Event('focus'));true`);
+    await browser.until(`document.querySelector('[data-client-profile][aria-busy="false"]') && document.querySelector('[name=displayName]:enabled')`, 'post-save revalidation');
+    assert.equal(await browser.evaluate(`document.querySelector('[name=displayName]').value`), 'Second saved draft');
+    await commercialClick(browser, 'Save display name');
+    await browser.until(`document.querySelector('[role=status]')?.textContent==='Display name saved.' && document.querySelector('h1')?.textContent==='Second saved draft'`, 'second save');
+    assert.deepEqual(await browser.evaluate('window.profileWrites'), [
+      { displayName: 'Saved draft', expectedDisplayName: 'Latest saved name' },
+      { displayName: 'Second saved draft', expectedDisplayName: 'Saved draft' },
+    ]);
+    assert.equal(await fixture.auditLog.count({ where: { action: 'CLIENT_PROFILE_UPDATED', targetId: target.id } }), 2);
   });
 });
 

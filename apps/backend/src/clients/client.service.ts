@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, Role } from '@prisma/client';
+import { AuditAction, AuditTarget, Prisma, Role } from '@prisma/client';
+import { audit } from '../platform/audit';
+import { Commands } from '../platform/commands';
 import { AccessContext, Sessions } from '../identity/session.service';
 import { Database } from '../platform/database';
 import { failure } from '../platform/http';
-import { ClientListQuery } from './client.dto';
+import { ClientListQuery, UpdateClientProfileDto } from './client.dto';
 
 const clientScope = { user: { role: Role.CLIENT } } satisfies Prisma.ClientProfileWhereInput;
 const profileFields = {
@@ -33,7 +35,7 @@ function decodeCursor(value: string) {
 
 @Injectable()
 export class ClientService {
-  constructor(private readonly db: Database, private readonly sessions: Sessions) {}
+  constructor(private readonly db: Database, private readonly sessions: Sessions, private readonly commands: Commands) {}
 
   async list(query: ClientListQuery) {
     // Prisma implements startsWith using LIKE or ILIKE. Treat wildcard characters as literal input.
@@ -79,5 +81,30 @@ export class ClientService {
     });
     if (!row) throw failure(404, 'CLIENT_NOT_FOUND');
     return profile(row);
+  }
+
+  async update(id: string, dto: UpdateClientProfileDto, access: AccessContext, key: string | undefined, requestId: string) {
+    await this.commands.run({
+      access, action: 'user.manage', operation: 'client.profile.update', key,
+      args: [id, dto.displayName, dto.expectedDisplayName], targetUser: id,
+      scope: async tx => {
+        // Lock the profile as well as its identity, including on a successful retry.
+        const rows = await tx.$queryRaw<{ userId: string }[]>`
+          SELECT cp.user_id AS "userId" FROM client_profile cp
+          JOIN app_user u ON u.id = cp.user_id
+          WHERE cp.user_id = ${id}::uuid AND u.role = 'CLIENT'::user_role FOR UPDATE OF cp`;
+        if (!rows.length) throw failure(404, 'CLIENT_NOT_FOUND');
+      },
+      write: async tx => {
+        const row = await tx.clientProfile.findUniqueOrThrow({ where: { userId: id }, select: { displayName: true } });
+        if (row.displayName !== dto.expectedDisplayName) throw failure(409, 'CLIENT_PROFILE_CHANGED');
+        if (row.displayName !== dto.displayName) {
+          await tx.clientProfile.update({ where: { userId: id }, data: { displayName: dto.displayName } });
+          await audit(tx, { actorId: access.userId, action: AuditAction.CLIENT_PROFILE_UPDATED,
+            targetType: AuditTarget.USER, targetId: id, requestId, redactedDetails: { fields: ['displayName'] } });
+        }
+        return { status: 204 };
+      },
+    });
   }
 }
