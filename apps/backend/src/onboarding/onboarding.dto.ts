@@ -29,7 +29,7 @@ export class OnboardingCommandDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(1, 500) reason!: string;
 }
-export class EmptyOnboardingQuery {}
+export class EmptyOnboardingQuery { }
 export class InvitationDto {
   @ApiProperty({ format: 'uuid' }) clientId!: string;
   @ApiProperty({ format: 'uuid' }) challengeId!: string;

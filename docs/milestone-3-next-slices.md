@@ -120,6 +120,30 @@ delegated Staff or cancellation behavior remains excluded under O-03/O-04/O-17.
 
 ### S2 — Client account setup and recovery
 
+**27 November preparation checkpoint:** The
+[O-02 decision and contract review](o02-onboarding-decision-review.md) is complete
+as discovery/documentation. Its verdict is **NOT READY — BUSINESS DECISIONS
+REQUIRED**. The next task is one invited-Client contract closure workshop, resolving
+remaining duplicate/reissue policy and essential separate-email delivery before
+a separately authorized S2-A implementation. Owner A/B/C answers are recorded:
+Admin manually shares a single-use initial setup link; separate email proof plus
+password setup enables access automatically for both paths with no Membership/
+payment requirement; first invitation implementation is Admin-only with Staff
+reads retained. Two-stage proof mechanics and expiry/password parameters remain
+proposals; no runtime behavior changes and the onboarding gate stays closed.
+
+**Later 27 November remaining-decision checkpoint:** The
+[O-02-B1–B5 closure report](o02-b-onboarding-decision-closure.md) records approved
+no-automatic-link duplicate handling, 24-hour setup/email-proof links, selected
+60-second/5-per-recipient-purpose-hour resend limits, separate committed email
+proof/password setup, and an isolated fake-transport delivery planning boundary.
+Latest readiness: **READY FOR S2-A IMPLEMENTATION PLAN**, planning-only and still
+requiring explicit next-task authorization. Implementation and production remain
+**NOT READY — BUSINESS DECISIONS REQUIRED**. Password-setup authorization/security
+details await plan review; actual email operations and production Admin bootstrap
+remain release gates. This updates the earlier preparation readiness above; it
+does not enable any runtime workflow or start implementation planning automatically.
+
 **Objective/roles/journey:** Admin creates a Client or enabled self-registration
 creates a pending Client; the person proves email/setup-token ownership, gains
 approved access and can recover credentials without exposing another account.
@@ -440,3 +464,14 @@ and production bootstrap remain deferred. There is no default real email provide
 or scheduled sender; real-email usage/production readiness is not established.
 Next action is owner review of this implementation, not automatic next-feature
 work. Commit/push/PR/migration-to-production/deployment remain separate gates.
+
+## S2-A finalization checkpoint — 28 November 2026
+
+The prior implementation/planning checkpoints above are historical. S2-A and its
+R01-R03 corrections were preserved in `8b4ebc2`; the owner subsequently authorized
+final documentation, quality review, targeted validation, commit and normal
+feature-branch push. [Acceptance evidence](s2a-human-acceptance-session.md) records
+required human checks PASS with the S11 limitation, 14 backend and 11 Dashboard
+tests, and Low cosmetic HA-UI-01. Formal product acceptance remains pending.
+Production readiness is not approved or assessed. No PR, merge, real delivery,
+production operation or next feature is authorized by this checkpoint.

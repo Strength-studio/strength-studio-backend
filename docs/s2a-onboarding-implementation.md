@@ -1,5 +1,20 @@
 # S2-A Client onboarding implementation and verification
 
+**Current delivery checkpoint — 28 November 2026:** implementation and R01-R03
+corrections were preserved in `8b4ebc221e3e7cfe1d3dcf1bc7356049e33696f2` on
+`codex/s2a-client-onboarding-20261127`. The reviewed follow-up includes the
+password-rejection audit correction and regressions, an isolated operator harness,
+and the [completed human acceptance evidence](s2a-human-acceptance-session.md).
+Required H01-H10 and S01-S11 passed with the S11 qualification; finalization reran
+14 backend and 11 Dashboard tests successfully. Formal product acceptance remains
+pending, HA-UI-01 remains Low/cosmetic, and production readiness is not approved or
+assessed. The owner authorized finalization, commit and normal feature-branch push;
+PR creation, merge, real delivery and production changes remain excluded.
+
+The dated Git/readiness descriptions below are historical checkpoints. See the
+[engineering review](s2a-acceptance-review.md) for the audit follow-up and the
+acceptance evidence for current status.
+
 27 November 2026, Africa/Cairo. Bounded local implementation authorized by the
 owner's S2-A task. No commit, remote operation or production authorization is
 included. This report supersedes earlier planning-only readiness for this slice;

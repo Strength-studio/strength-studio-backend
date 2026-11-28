@@ -44,7 +44,7 @@ unset LOCAL_ADMIN_PASSWORD LOCAL_ADMIN_EMAIL
 
 With the API running against a database that already has the catalog schema, start the dashboard with `pnpm dev:dashboard`. Open [the local dashboard](http://localhost:3001), matching `DASHBOARD_ORIGIN` in `.env`. Set `API_BASE_URL` to the API origin and configure `DASHBOARD_CSRF_KEY`. Sign in as Admin to manage packages and session types. Staff need explicit catalog grants. A manager also needs `catalog.read` to choose active session types, and `audit.read` to see package audit events.
 
-Admin and Staff with `client.manage` can open the Client directory at `/clients` and view individual profiles. Authenticated Clients can read their own profile through the API. These features use existing Client records and require no schema changes. See the [Client read contract](docs/api-contract.md#implemented-client-reads). Registration, invitation, and account setup remain gated by O-02. Admin can maintain an existing Client’s display name and explicitly disable account access from the detail page. Staff retain read-only access. These S1-B1 writes require the narrow profile-maintenance migration; [scope and retry behavior](docs/api-contract.md#s1-b1-admin-client-profile-maintenance).
+Admin and Staff with `client.manage` can open the Client directory at `/clients` and view individual profiles. Authenticated Clients can read their own profile through the API. These reads use existing Client records and require no schema changes. See the [Client read contract](docs/api-contract.md#implemented-client-reads). Bounded Admin Client onboarding is implemented as S2-A below; self-registration and recovery remain gated by O-02. Admin can maintain an existing Client’s display name and explicitly disable account access from the detail page. Staff retain read-only access. These S1-B1 writes require the narrow profile-maintenance migration; [scope and retry behavior](docs/api-contract.md#s1-b1-admin-client-profile-maintenance).
 
 ## Verification
 
@@ -138,3 +138,11 @@ STUDIO_TEST_CHROME="$(command -v google-chrome)" node --experimental-websocket -
 Root `pnpm test:integration` includes Foundation and S2-A. See the
 [API contract](docs/api-contract.md#implemented-s2-a-admin-client-onboarding) and
 [verification/rollback report](docs/s2a-onboarding-implementation.md).
+
+The [S2-A engineering review and checklist](docs/s2a-acceptance-review.md) describes
+the isolated operator-only `scripts/s2a-acceptance.cjs` harness. It creates a
+disposable test database and private fake inbox; no application debug endpoint or
+real sender is added. The [28 November acceptance evidence](docs/s2a-human-acceptance-session.md)
+records H01-H10 and S01-S11 PASS (S11 qualified), 14 backend and 11 Dashboard tests,
+and the Low cosmetic HA-UI-01 observation. Formal reviewer acceptance remains
+pending; real-email delivery and production readiness are not approved or assessed.

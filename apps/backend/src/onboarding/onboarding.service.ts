@@ -188,10 +188,16 @@ export class OnboardingService {
     this.available();
     if (this.hashing >= 2) throw failure(429, 'AUTH_BUSY');
     // Validate the capability before expensive hashing, then recheck under the User lock.
-    if (!validSecret(value)) throw invalid();
+    if (!validSecret(value)) {
+      await this.rejected(requestId, 'PASSWORD');
+      throw invalid();
+    }
     const preliminary = await this.db.onboardingChallenge.findUnique({ where: { digest: digest(value) } });
     if (!preliminary || preliminary.purpose !== 'PASSWORD' || preliminary.consumedAt || preliminary.revokedAt
-      || preliminary.expiresAt <= await databaseTime(this.db)) throw invalid();
+      || preliminary.expiresAt <= await databaseTime(this.db)) {
+      await this.rejected(requestId, 'PASSWORD');
+      throw invalid();
+    }
     if (this.hashing >= 2) throw failure(429, 'AUTH_BUSY');
     this.hashing++;
     let hash: string;

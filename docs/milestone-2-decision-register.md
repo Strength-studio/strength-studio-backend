@@ -16,6 +16,62 @@ Updated 10 November 2026. Business approval comes from the project owner’s con
 
 **Implementation dependencies.** Define verified/active state transitions, registration policy checks, purpose-bound single-use invite/verification/reset tokens, collision and abuse handling, session revocation and recovery audit. Foundation already checks current grants and verified active accounts and provides audited Admin grant changes. Registration, invitation, verification and recovery are still stubs.
 
+**27 November 2026 — explicit owner answers during S2 preparation.** The owner selected:
+
+- **O-02-A:** Admin shares a single-use initial setup link outside the application;
+  email ownership proof remains separate. A manually shared link does not verify email.
+- **O-02-B:** After email ownership proof and password setup, enable access
+  automatically for both Admin-created and enabled self-registration paths, with
+  no Membership/payment requirement. No additional Admin enablement approval is required.
+- **O-02-C:** The first implemented invitation flow is Admin-only. Retain Staff
+  reads; explicitly reconcile the existing `client.manage` invitation binding in
+  the later implementation rather than silently changing its meaning.
+
+These answers close the historical setup-channel/enablement questions above at
+business level and narrow invitation authority for the first implementation.
+They authorize no implementation, delivery, migration or production operation.
+Production Admin bootstrap/lifecycle responsibility remains unresolved.
+
+The
+[O-02 onboarding decision and contract review](o02-onboarding-decision-review.md)
+records current implementation, conditional lifecycle and proposed contracts.
+Its O-02-A–L subdecisions distinguish the approved answers from pending duplicate
+handling, challenge/reissue policy, recovery, separate email-proof delivery,
+retention and production Admin responsibilities. The proposed two-stage manual
+INVITE → separate emailed VERIFY_EMAIL flow, one-time link disclosure and technical
+parameters still require contract review. Verdict: **NOT READY — BUSINESS
+DECISIONS REQUIRED**; next task is the bounded remaining invited-Client contract
+closure workshop. Runtime permissions/authentication remain unchanged.
+
+**27 November 2026 — subsequent O-02-B1–B5 closure checkpoint.** The owner
+explicitly approved the following additional boundaries; these do not rename the
+earlier O-02-B automatic-enablement decision:
+
+- **O-02-B1 / original E:** No automatic identity merge/link or credential overwrite.
+  Reject duplicate Admin creation with a bounded conflict; use explicit reissue
+  for the existing invited Client; public requests reveal no account state.
+- **O-02-B2/B3 / approved parts of G:** Initial setup link expires after **24 hours**;
+  separate email-proof link after **24 hours**; resend cooldown **60 seconds** and
+  at most **5 per recipient/purpose/hour**. Password-setup ticket, new-password,
+  failed-attempt and provider retry parameters were not approved by this answer.
+- **O-02-B3:** Email proof and password setup are **separate committed steps**, with
+  a short-lived single-use password-setup authorization and no account access until
+  both complete. Exact ticket/transport/expiry/recovery details remain for review.
+  This supersedes the earlier combined verify-email/password DTO proposal, not an
+  implemented API or the existing automatic-enablement approval.
+- **O-02-B4 / bounded K planning:** A later S2-A plan may specify application-owned
+  durable email-proof dispatch and a replaceable adapter with **fake transport in
+  isolated tests**. Retain existing O-11 provider direction. Actual sender/secrets/
+  provider activation and named operational responsibilities remain production gates.
+
+The [remaining onboarding closure report](o02-b-onboarding-decision-closure.md)
+maps B1–B5 to the original register, records scenario/security/audit contracts and
+distinguishes levels: **READY FOR S2-A IMPLEMENTATION PLAN** within the isolated
+fake-transport boundary; implementation and production remain **NOT READY —
+BUSINESS DECISIONS REQUIRED** pending remaining security-policy/plan and release
+approvals. O-02-B5 production Admin bootstrap remains **UNRESOLVED**. The next task
+is a separately authorized planning-only S2-A review; no implementation is authorized.
+
 
 ### S2-A implementation checkpoint — 27 November 2026
 

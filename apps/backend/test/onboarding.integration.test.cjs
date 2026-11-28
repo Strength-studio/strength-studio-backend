@@ -286,3 +286,45 @@ test('S2-A HTTP logs and rejection/delivery audits never record proof or passwor
     assert(!audits.includes(value), 'Audit must exclude credentials/recipient');
   }
 });
+
+test('S2-A collision matrix preserves every existing identity and denies all non-Admin managers', async () => {
+  for (const [role, accountState, verified] of [
+    ['CLIENT', 'ACTIVE', true], ['CLIENT', 'DISABLED', true], ['CLIENT', 'INVITED', false],
+    ['CLIENT', 'PENDING_VERIFICATION', false], ['CLIENT', 'ACTIVE', false],
+    ['STAFF', 'ACTIVE', true], ['COACH', 'ACTIVE', true], ['ADMIN', 'ACTIVE', true],
+  ]) {
+    const existing = await db.user.create({ data: { normalizedEmail: randomUUID() + '@s2a.example', role, accountState,
+      emailVerifiedAt: verified ? new Date() : null, passwordHash: await hashPassword(fixturePassword),
+      ...(role === 'CLIENT' ? { client: { create: { displayName: 'Unchanged collision fixture' } } } : {}) } });
+    const before = await db.user.findUniqueOrThrow({ where: { id: existing.id }, include: { client: true } });
+    const result = await ok(409, '/users/invite', { email: '  ' + existing.normalizedEmail.toUpperCase() + '  ', displayName: 'Must not replace' }, admin, randomUUID());
+    assert.equal(result.code, 'CLIENT_IDENTITY_CONFLICT');
+    assert.deepEqual(await db.user.findUniqueOrThrow({ where: { id: existing.id }, include: { client: true } }), before);
+    assert.equal(await db.clientOnboarding.count({ where: { userId: existing.id } }), 0);
+  }
+  const invitation = await invite();
+  for (const role of ['CLIENT', 'COACH']) {
+    const access = (await app.get(Sessions).login(users[role].normalizedEmail, fixturePassword)).accessToken;
+    await ok(403, '/users/invite', { email: randomUUID() + '@s2a.example', displayName: 'Forbidden' }, access, randomUUID());
+    for (const action of ['reissue', 'revoke']) await ok(403, `/users/${invitation.clientId}/onboarding/${action}`,
+      { expectedRevision: 1, reason: 'Forbidden' }, access, randomUUID());
+    await ok(403, `/clients/${invitation.clientId}/onboarding`, undefined, access, undefined, 'GET');
+  }
+});
+
+test('S2-A rejected password capabilities are audited even before expensive hashing', async () => {
+  const absent = randomBytes(32).toString('base64url');
+  const before = await db.auditLog.count({ where: { action: 'ONBOARDING_REJECTED' } });
+  await ok(400, '/auth/setup-password', { token: absent, password: fixturePassword });
+  assert.equal(await db.auditLog.count({ where: { action: 'ONBOARDING_REJECTED' } }), before + 1);
+  const invitation = await invite(), delivered = await proveInvitation(invitation);
+  const ticket = await ok(200, '/auth/verify-email', { token: delivered.emailToken });
+  await db.$executeRaw`UPDATE onboarding_challenge SET created_at=clock_timestamp()-interval '16 minutes', expires_at=clock_timestamp()-interval '1 second' WHERE user_id=${invitation.clientId}::uuid AND purpose='PASSWORD'`;
+  await ok(400, '/auth/setup-password', { token: ticket.token, password: fixturePassword });
+  const events = await db.auditLog.findMany({ where: { action: 'ONBOARDING_REJECTED' }, orderBy: { createdAt: 'desc' }, take: 2 });
+  assert.equal(await db.auditLog.count({ where: { action: 'ONBOARDING_REJECTED' } }), before + 2);
+  assert(events.every(e => e.actorId === null && e.redactedDetails.stage === 'PASSWORD' && e.redactedDetails.outcome === 'REJECTED'));
+  for (const value of [absent, ticket.token, fixturePassword]) assert(!JSON.stringify(events).includes(value));
+  const user = await db.user.findUniqueOrThrow({ where: { id: invitation.clientId } });
+  assert.equal(user.accountState, 'PENDING_VERIFICATION'); assert.equal(user.passwordHash, null);
+});

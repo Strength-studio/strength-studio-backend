@@ -45,12 +45,17 @@ The [original audit](milestone-0-final-readiness-audit.md) is retained as the pr
 The Foundation recommendation was based on a documentation cross-check. The owner has authorized Foundation. [Open studio decisions](open-decisions.md) still gate their affected workflows. The audit's later-workflow findings remain open. See [local setup and verification](../README.md) for the implementation scope and test commands.
 
 
-## S2-A local implementation — 27 November 2026
+## S2-A delivery checkpoint — 28 November 2026
 
-Following explicit owner implementation authorization, S2-A Admin Client onboarding
-is implemented and verified locally: manual setup-link disclosure, separate email
-proof, password setup and automatic account access independent of Membership/payment.
-It remains uncommitted and uses isolated fake transport; no real email provider or
-production operation is enabled. [Current execution checkpoint](milestone-3-next-slices.md#s2-a-authorized-implementation-checkpoint--27-november-2026)
-and [implementation/test/rollback report](s2a-onboarding-implementation.md) distinguish
-this delivery from remaining S2 and production gates. The next step is owner review.
+S2-A Admin Client onboarding implements manual setup-link disclosure, separate
+email proof and password setup, and automatic account access independent of
+Membership/payment. Implementation and R01-R03 corrections were preserved in
+`8b4ebc221e3e7cfe1d3dcf1bc7356049e33696f2`; the delivery follow-up adds reviewed
+password-rejection audit coverage, regression tests and the isolated acceptance
+harness. [Acceptance evidence](s2a-human-acceptance-session.md) records all required
+human checks PASS, with the S11 qualification and Low cosmetic HA-UI-01 retained.
+Formal product acceptance remains pending. No real email provider or production
+operation is approved or assessed. The [engineering review](s2a-acceptance-review.md)
+and [implementation report](s2a-onboarding-implementation.md) distinguish the
+completed bounded slice from wider S2 and release gates. Finalization permits a
+normal feature-branch commit/push; PR preparation, merge and release remain separate.
